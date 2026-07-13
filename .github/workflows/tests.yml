@@ -1,12 +1,20 @@
 name: tests
 
 on:
+  workflow_dispatch:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
+    branches: [main]
 
 permissions:
   contents: read
+
+# A push run tests the branch head; a pull_request run tests it merged into main. Supersede
+# in-progress runs of the same ref, but never cancel main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
