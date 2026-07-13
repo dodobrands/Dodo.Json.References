@@ -1,7 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
         <RepositoryUrl>https://github.com/dodobrands/Dodo.Json.References</RepositoryUrl>
-        <AnalysisMode>None</AnalysisMode>
         <Description>Pooled System.Text.Json reference serialization: a streaming $id/$ref to JSON Pointer transformer plus reusable (options + reference resolver) leases for large documents.</Description>
     </PropertyGroup>
 

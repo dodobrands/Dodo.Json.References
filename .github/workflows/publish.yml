@@ -3,7 +3,11 @@ name: publish
 on:
   push:
     tags:
-      - "v*"
+      - "v[0-9]*"
+
+permissions:
+  contents: read
+  packages: write
 
 jobs:
   publish:

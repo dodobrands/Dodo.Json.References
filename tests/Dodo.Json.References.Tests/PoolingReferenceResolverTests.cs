@@ -30,7 +30,7 @@ internal class PoolingReferenceResolverTests
         writeAfter.Should().Be(writeBefore);
     }
 
-    // Menu-scale documents track tens of thousands of ids; capacity in that range must survive Reset
+    // Large documents track tens of thousands of ids; capacity in that range must survive Reset
     // untouched, otherwise every pooled reuse would trim and regrow the maps.
     [Test]
     public void ResetKeepsCapacityOfMenuScaleMaps()

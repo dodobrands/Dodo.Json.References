@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -33,7 +34,7 @@ public sealed class PoolingReferenceResolver : ReferenceResolver
     }
 
     private static string UInt32ToDecStr(uint value)
-        => value <= NumberCache.Length ? UInt32ToDecStrForKnownSmallNumber(value) : value.ToString();
+        => value <= NumberCache.Length ? UInt32ToDecStrForKnownSmallNumber(value) : value.ToString(CultureInfo.InvariantCulture);
 
     private static string UInt32ToDecStrForKnownSmallNumber(uint value)
     {
@@ -41,7 +42,7 @@ public sealed class PoolingReferenceResolver : ReferenceResolver
 
         [MethodImpl(MethodImplOptions.NoInlining)]
         static string CreateAndCacheString(uint value)
-            => NumberCache[value - 1] = value.ToString();
+            => NumberCache[value - 1] = value.ToString(CultureInfo.InvariantCulture);
     }
 
     public override object ResolveReference(string referenceId) =>

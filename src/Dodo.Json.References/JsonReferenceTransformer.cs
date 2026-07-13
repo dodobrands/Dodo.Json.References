@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Globalization;
 using System.IO.Pipelines;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -442,7 +443,7 @@ public static class JsonReferenceTransformer
                                 writer.WritePropertyName(EncodedId);
                                 if (pendingDroppedIdLen == -2)
                                 {
-                                    pendingDroppedNumericId.TryFormat(pendingDroppedId, out var formatted);
+                                    pendingDroppedNumericId.TryFormat(pendingDroppedId, out var formatted, provider: CultureInfo.InvariantCulture);
                                     writer.WriteStringValue(pendingDroppedId[..formatted]);
                                 }
                                 else if (pendingDroppedIdString is not null)
@@ -620,7 +621,7 @@ public static class JsonReferenceTransformer
             if (seg is { IsArray: true, ArrayIndex: >= 0 })
             {
                 dst[pos++] = (byte)'/';
-                seg.ArrayIndex.TryFormat(dst[pos..], out var written);
+                seg.ArrayIndex.TryFormat(dst[pos..], out var written, provider: CultureInfo.InvariantCulture);
                 pos += written;
             }
 
