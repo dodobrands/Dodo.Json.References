@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Dodo.Json.References/Dodo.Json.References.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Dodo.Json.References.Tests/Dodo.Json.References.Tests.csproj" />
+  </Folder>
+</Solution>

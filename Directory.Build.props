@@ -1,0 +1,11 @@
+<Project>
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <LangVersion>14.0</LangVersion>
+        <Nullable>enable</Nullable>
+        <AnalysisMode>All</AnalysisMode>
+        <NoWarn>CA1861,CA1848,CA1707,CA2007,CA1014,CA1716,CA1034,CA1725,CA1062,CA1032,CA5398,CA1812,CA1816,CA1063,CA1822,CA1852,NU1507</NoWarn>
+    </PropertyGroup>
+</Project>

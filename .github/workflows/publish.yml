@@ -1,0 +1,44 @@
+name: publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    name: publish-nuget
+    runs-on: ubuntu-latest
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    steps:
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Prepare to install packages
+        run: |
+          dotnet nuget add source --username USERNAME --password ${{ secrets.PACKAGES_TOKEN }} --store-password-in-clear-text --name github "${{ secrets.NUGET_SOURCE }}"
+
+      - name: Restore
+        run: dotnet restore Dodo.Json.References.slnx
+
+      - name: Test
+        run: dotnet test tests/Dodo.Json.References.Tests -c Release
+
+      - name: Get the version
+        id: get_version
+        run: echo VERSION=${GITHUB_REF/refs\/tags\/v/} >> $GITHUB_OUTPUT
+
+      - name: Publish
+        env:
+          VERSION: ${{ steps.get_version.outputs.VERSION }}
+          NUGET_SOURCE: ${{ secrets.NUGET_SOURCE }}
+          GITHUB_TOKEN_VALUE: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dotnet pack src/Dodo.Json.References/Dodo.Json.References.csproj -c Release /p:Version="$VERSION"
+          dotnet nuget push src/Dodo.Json.References/bin/Release/Dodo.Json.References."$VERSION".nupkg --source "$NUGET_SOURCE" --api-key "$GITHUB_TOKEN_VALUE"
