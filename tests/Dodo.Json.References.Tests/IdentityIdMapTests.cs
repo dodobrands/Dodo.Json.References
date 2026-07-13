@@ -6,10 +6,6 @@ using NUnit.Framework;
 
 namespace Dodo.Json.References.Tests;
 
-/// <summary>
-/// The resolver's write-path map: identity-keyed, sequential ids, no deletions, reset between
-/// documents. Correctness is proven against a Dictionary oracle across growth and reuse cycles.
-/// </summary>
 [TestFixture]
 internal class IdentityIdMapTests
 {
@@ -47,7 +43,6 @@ internal class IdentityIdMapTests
             existed.Should().BeFalse();
         }
 
-        // every object still resolves to its original id after many growth rehashes
         for (var i = 0; i < objects.Length; i++)
         {
             map.GetOrAdd(objects[i], out var existed).Should().Be((uint)(i + 1));
@@ -85,8 +80,7 @@ internal class IdentityIdMapTests
             var oracle = new Dictionary<object, uint>(ReferenceEqualityComparer.Instance);
             var pool = Enumerable.Range(0, 40_000).Select(_ => new object()).ToArray();
 
-            // mixed first-sights and repeats, like a real document walk
-            for (var i = 0; i < 120_000; i++)
+                for (var i = 0; i < 120_000; i++)
             {
                 var o = pool[rnd.Next(pool.Length)];
                 var id = map.GetOrAdd(o, out var existed);

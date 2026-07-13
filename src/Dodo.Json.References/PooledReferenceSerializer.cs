@@ -5,10 +5,7 @@ using Microsoft.Extensions.ObjectPool;
 
 namespace Dodo.Json.References;
 
-/// <summary>
-/// Pools (options + resolver) leases for serializing <typeparamref name="T"/> with pointer refs.
-/// Create one instance per (base options, type) pair and reuse it.
-/// </summary>
+/// <summary>Create one instance per (base options, type) pair and reuse it; each lease pins a warm type-info graph.</summary>
 public sealed class PooledReferenceSerializer<T>
 {
     private readonly ObjectPool<ReferenceLease<T>> _pool;
@@ -19,10 +16,7 @@ public sealed class PooledReferenceSerializer<T>
     {
     }
 
-    /// <remarks>
-    /// Base options are snapshotted (later mutations not observed); the first lease is built eagerly
-    /// for fail-fast and a warm type-info graph.
-    /// </remarks>
+    /// <remarks>Base options are snapshotted — later mutations are not observed; the first lease is built eagerly (fail-fast).</remarks>
     public PooledReferenceSerializer(
         JsonSerializerOptions baseOptions,
         Func<JsonSerializerOptions, JsonTypeInfo<T>> typeInfoFactory,

@@ -3,10 +3,7 @@ using System.Numerics;
 
 namespace Dodo.Json.References;
 
-/// <summary>
-/// ArrayPool-backed whole-document buffer renting at a learned high-water hint: the first document
-/// pays a grow ladder once, then every rent is right-sized and the shared pool handles trimming.
-/// </summary>
+/// <summary>Whole-document ArrayPool buffer renting at a learned high-water hint: the first document pays the grow ladder once.</summary>
 internal sealed class PooledJsonBufferWriter: IBufferWriter<byte>, IDisposable
 {
     private const int InitialCapacity = 64 * 1024;
@@ -14,7 +11,6 @@ internal sealed class PooledJsonBufferWriter: IBufferWriter<byte>, IDisposable
     // Cap: one pathological document must not permanently inflate every future rent.
     private const int MaxCapacityHint = 64 * 1024 * 1024;
 
-    // Ratchets monotonically to the observed high-water mark (see InterlockedMath.Max).
     private static int _initialCapacityHint = InitialCapacity;
 
     private byte[] _buffer = ArrayPool<byte>.Shared.Rent(Volatile.Read(ref _initialCapacityHint));

@@ -6,11 +6,6 @@ using NUnit.Framework;
 
 namespace Dodo.Json.References.Tests;
 
-/// <summary>
-/// Pointer-path tracking for array shapes beyond flat object arrays: $values wrappers at any depth,
-/// arrays nested as array elements, and collections at the document root. Every referenced $id must
-/// get a unique RFC 6901 path that reflects its real position, or deserialization dies on duplicate ids.
-/// </summary>
 [TestFixture]
 internal class JsonReferenceTransformerPathTests
 {
@@ -157,8 +152,7 @@ internal class JsonReferenceTransformerPathTests
             MaxDepth = 512
         };
 
-        // 300 array levels: outgrows the 80-slot stack path segment scratch and then the first
-        // pooled replacement (Rent(160) hands out a 256-slot bucket).
+        // 300 levels outgrow the 80-slot stack scratch and the first pooled replacement (Rent(160) = 256-slot bucket).
         var shared = new Node { Name = "leaf" };
         object[] nested = [shared];
         for (var i = 0; i < 299; i++)

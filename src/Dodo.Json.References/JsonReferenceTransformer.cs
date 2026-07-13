@@ -9,15 +9,7 @@ using System.Text.Json.Serialization.Metadata;
 
 namespace Dodo.Json.References;
 
-/// <summary>
-/// High-performance streaming JSON reference transformer.
-/// Transforms sequential $id/$ref (from ReferenceHandler.Preserve) to JSON Pointer paths.
-/// Avoids JsonNode allocation entirely by using Utf8JsonReader/Writer streaming.
-/// </summary>
-/// <remarks>
-/// Metadata detection is name-based ($id/$ref/$values), ids must not require JSON escaping, and the
-/// encoder must not escape '/' or '~' in property names (default and UnsafeRelaxed never do).
-/// </remarks>
+/// <remarks>Ids must not require JSON escaping and the encoder must not escape '/' or '~' in property names (default and UnsafeRelaxed never do).</remarks>
 public static class JsonReferenceTransformer
 {
     // Covers the reader's default MaxDepth of 64; deeper documents spill into pooled growth.
@@ -37,8 +29,7 @@ public static class JsonReferenceTransformer
     private static readonly StreamPipeWriterOptions StreamOutputOptions =
         new(minimumBufferSize: StreamSegmentSize, leaveOpen: true);
 
-    // Learned grow floor for the referenced-id builder; capped so one pathological document
-    // cannot inflate it for good.
+    // Learned grow floor, capped so one pathological document cannot inflate it for good.
     private const int MaxReferencedIdsHint = 65_536;
     private static int _referencedIdsHint = 4096;
 
@@ -60,8 +51,7 @@ public static class JsonReferenceTransformer
 
     private static readonly byte[] RootPathBytes = [.. "\"#\""u8];
 
-    // Negative PropertyNameOffset marks a nameless segment ($values wrapper or array-in-array),
-    // which contributes only its element index to pointer paths.
+    // Negative PropertyNameOffset = nameless segment ($values wrapper or array-in-array): contributes only its index.
     [StructLayout(LayoutKind.Sequential)]
     private struct PathSegment
     {
@@ -71,9 +61,6 @@ public static class JsonReferenceTransformer
         public bool IsArray;
     }
 
-    /// <summary>
-    /// Serializes an object to JSON with JSON Pointer references.
-    /// </summary>
     public static async Task SerializeWithPointers<T>(
         T payload,
         Stream output,
@@ -89,9 +76,6 @@ public static class JsonReferenceTransformer
         await TransformToStream(bufferWriter.WrittenMemory, output, options, ct);
     }
 
-    /// <summary>
-    /// Serializes an object to JSON with JSON Pointer references using source-generated metadata.
-    /// </summary>
     public static async Task SerializeWithPointers<T>(
         T payload,
         Stream output,
@@ -108,14 +92,7 @@ public static class JsonReferenceTransformer
         await TransformToStream(bufferWriter.WrittenMemory, output, options, ct);
     }
 
-    /// <summary>
-    /// Serializes an object to JSON with JSON Pointer references.
-    /// Uses PipeWriter for improved buffer management and backpressure handling.
-    /// </summary>
-    /// <remarks>
-    /// For ASP.NET Core <c>HttpResponse.BodyWriter</c>, the framework manages completion automatically.
-    /// For standalone <see cref="Pipe"/> usage, caller must call <see cref="PipeWriter.Complete"/> after this method returns.
-    /// </remarks>
+    /// <remarks>Standalone <see cref="Pipe"/> callers must call <see cref="PipeWriter.Complete"/> afterwards; ASP.NET Core completes <c>HttpResponse.BodyWriter</c> itself.</remarks>
     public static async Task SerializeWithPointers<T>(
         T payload,
         PipeWriter output,
@@ -131,10 +108,6 @@ public static class JsonReferenceTransformer
         await TransformToPipe(bufferWriter.WrittenMemory, output, options, ct);
     }
 
-    /// <summary>
-    /// Serializes an object to JSON with JSON Pointer references using source-generated metadata.
-    /// Uses PipeWriter for improved buffer management and backpressure handling.
-    /// </summary>
     public static async Task SerializeWithPointers<T>(
         T payload,
         PipeWriter output,
@@ -154,8 +127,7 @@ public static class JsonReferenceTransformer
     private static JsonWriterOptions GetWriterOptions(JsonSerializerOptions options)
         => GetWriterOptions(options, options.WriteIndented);
 
-    // The intermediate buffer is byte-scanned for "$ref":" and must never be indented; the final
-    // writer still honors the caller's WriteIndented.
+    // The intermediate buffer is byte-scanned for "$ref":" and must never be indented; the final writer honors WriteIndented.
     private static JsonWriterOptions GetWriterOptions(JsonSerializerOptions options, bool indented)
         => new()
         {
@@ -168,8 +140,7 @@ public static class JsonReferenceTransformer
             SkipValidation = true
         };
 
-    // PipeWriter wrapping keeps the writer in IBufferWriter mode: pooled 64KB segments and async
-    // flushes instead of buffering the whole document.
+    // PipeWriter wrapping keeps the writer in IBufferWriter mode: pooled segments instead of buffering the whole document.
     private static async ValueTask TransformToStream(
         ReadOnlyMemory<byte> jsonBytes,
         Stream output,
@@ -216,8 +187,7 @@ public static class JsonReferenceTransformer
         var pathStackDepth = 0;
         var jsonSpan = jsonBytes.Span;
 
-        // Pass 1: byte-scan for "$ref":" — decimal ids into the stack-first builder, exotic ones
-        // into a lazy string overflow set.
+        // Pass 1: byte-scan for "$ref":" — decimal ids into the stack-first builder, exotic ones into a lazy overflow set.
         HashSet<string>? referencedOverflow = null;
         var referencedIds = new PooledSpanBuilder<uint>(
             stackalloc uint[StackAllocIdCount],
@@ -225,8 +195,7 @@ public static class JsonReferenceTransformer
         );
         CollectReferencedIds(jsonSpan, ref referencedIds, out var maxNumericId, ref referencedOverflow);
 
-        // Sequential ids: membership is a bitmap, id-to-path a slot array — no hashing. Buffers are
-        // wiped for the used range on rent and returned dirty; every access is max-id-guarded.
+        // Dense structures are wiped only for the used range and returned dirty; every access is max-id-guarded.
         var bitmapWords = (int)(maxNumericId >> 6) + 1;
         var referencedBitmap = ArrayPool<ulong>.Shared.Rent(bitmapWords);
         Array.Clear(referencedBitmap, 0, bitmapWords);
@@ -249,8 +218,7 @@ public static class JsonReferenceTransformer
             Span<char> idDecodeSpan = stackalloc char[IdDecodeSpanSize];
             Span<char> pendingDroppedId = stackalloc char[IdDecodeSpanSize];
             string? pendingDroppedIdString = null;
-            // -1 none; -2 numeric parked in pendingDroppedNumericId; >= 0 chars in pendingDroppedId
-            // (0 with non-null pendingDroppedIdString = long id parked as a string).
+            // -1 none; -2 numeric parked; >= 0 chars in pendingDroppedId (0 with non-null string = long id).
             var pendingDroppedIdLen = -1;
             var pendingDroppedNumericId = 0u;
             var isRefProperty = false;
@@ -304,8 +272,7 @@ public static class JsonReferenceTransformer
 
                         if (isPendingValuesProperty)
                         {
-                            // $values is transparent in pointer paths: index-only segment, no name,
-                            // no enclosing-index bump.
+                            // $values is transparent in pointer paths: index-only segment, no name, no enclosing-index bump.
                             isPendingValuesProperty = false;
                             pathStack[pathStackDepth++] = new PathSegment
                             {
@@ -328,8 +295,7 @@ public static class JsonReferenceTransformer
                         }
                         else
                         {
-                            // Array-as-element (or root array): bump the enclosing index, then track
-                            // its own indexes in a nameless segment.
+                            // Array-as-element or root array: bump the enclosing index, then track own indexes namelessly.
                             if (pathStackDepth > 0)
                             {
                                 ref var top = ref pathStack[pathStackDepth - 1];
@@ -360,7 +326,6 @@ public static class JsonReferenceTransformer
 
                     case JsonTokenType.PropertyName:
                         var propSpan = reader.ValueSpan;
-                        // '$' probe short-circuits the metadata SequenceEqual chain for ordinary names.
                         var isMetadataCandidate = !propSpan.IsEmpty && propSpan[0] == (byte)'$';
                         if (isMetadataCandidate && propSpan.SequenceEqual(Utf8Id))
                         {
@@ -379,8 +344,7 @@ public static class JsonReferenceTransformer
                                 }
                                 else
                                 {
-                                    // Defer the drop: STJ needs an $id before $values, so a wrapper's
-                                    // id is re-emitted below if $values follows.
+                                    // Deferred drop: STJ requires $id before $values, so a wrapper's id is re-emitted if $values follows.
                                     pendingDroppedNumericId = numericId;
                                     pendingDroppedIdLen = -2;
                                     pendingDroppedIdString = null;
@@ -389,7 +353,6 @@ public static class JsonReferenceTransformer
                                 break;
                             }
 
-                            // Non-canonical ids go through string-keyed overflow maps.
                             string? idString = null;
                             scoped ReadOnlySpan<char> idSlice;
                             if (reader.ValueSpan.Length <= IdDecodeSpanSize)
@@ -579,8 +542,7 @@ public static class JsonReferenceTransformer
         return ValueTask.CompletedTask;
     }
 
-    // Builds a quoted pointer path like "#/items/0" into the caller's reusable scratch; names are
-    // copied as raw escaped JSON bytes with RFC 6901 specials escaped ('/' ~1, '~' ~0).
+    // Names are copied as raw escaped JSON bytes with RFC 6901 specials escaped ('/' ~1, '~' ~0).
     private static byte[] BuildCurrentPath(
         ReadOnlySpan<byte> jsonSpan,
         ReadOnlySpan<PathSegment> pathStack,
@@ -754,8 +716,6 @@ public static class JsonReferenceTransformer
             top.ArrayIndex++;
     }
 
-    #region Pooling
-
     private static Span<PathSegment> GrowPathStack(Span<PathSegment> current, ref PathSegment[]? rented)
     {
         var grown = ArrayPool<PathSegment>.Shared.Rent(current.Length * 2);
@@ -768,6 +728,4 @@ public static class JsonReferenceTransformer
         rented = grown;
         return grown;
     }
-
-    #endregion
 }

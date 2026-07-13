@@ -8,11 +8,6 @@ using NUnit.Framework;
 
 namespace Dodo.Json.References.Tests;
 
-/// <summary>
-/// Edge behavior of the streaming transformer: non-canonical reference ids, metadata-lookalike
-/// payload properties, primitive tokens, cancellation, PipeWriter output and the documented
-/// limitations (ids that require JSON escaping, dangling $ref).
-/// </summary>
 [TestFixture]
 internal class JsonReferenceTransformerEdgeTests
 {
@@ -57,10 +52,7 @@ internal class JsonReferenceTransformerEdgeTests
 
     internal sealed class DollarNameGraph
     {
-        // Note: [JsonPropertyName("$ref")] / "$id" / "$values" are rejected by System.Text.Json
-        // itself when a ReferenceHandler is active ("conflicts with an existing metadata property
-        // name"), so the transformer's name-based metadata detection cannot be spoofed through the
-        // public serialize API — only non-metadata $-names ever reach it.
+        // STJ itself rejects [JsonPropertyName("$id"/"$ref"/"$values")] under a ReferenceHandler, so metadata detection cannot be spoofed.
         [JsonPropertyName("$custom")]
         public Node[] Custom { get; set; } = [];
 
@@ -98,8 +90,7 @@ internal class JsonReferenceTransformerEdgeTests
         return new Pair { Left = shared, Right = shared };
     }
 
-    // Every shape TryParseNumericId rejects: non-digits, leading zero, a seven-digit value just
-    // past the dense bound (2^21) and an eight-digit length; all must transform via overflow maps.
+    // Every shape TryParseNumericId rejects: non-digits, leading zero, past the dense bound (2^21), eight digits.
     private static readonly Dictionary<string, Func<int, string>> NonCanonicalIdFactories = new()
     {
         ["short-alpha"] = n => $"id-{n}",
@@ -127,8 +118,7 @@ internal class JsonReferenceTransformerEdgeTests
     [Test]
     public async Task DanglingRef_KeepsOriginalIdValue()
     {
-        // A resolver that reports every object as already tracked emits $ref without any matching
-        // $id; the transformer must pass the opaque id through untouched instead of dying.
+        // $ref without any matching $id must pass the opaque id through untouched.
         var options = CustomIdOptions(n => n.ToString(System.Globalization.CultureInfo.InvariantCulture), alwaysExists: true);
         var json = await Serialize(new Pair { Left = new Node { Name = "a" } }, options);
 
@@ -139,9 +129,7 @@ internal class JsonReferenceTransformerEdgeTests
     [Test]
     public async Task EscapedIds_DefaultEncoder_PassThroughUntransformed()
     {
-        // Documented limitation: reference ids must not require JSON escaping. With the default
-        // encoder a non-ASCII id is written as \uXXXX, the byte scan and the unescaped lookup no
-        // longer agree, and the pair is left untransformed ($id dropped, $ref kept verbatim).
+        // Documented limitation: the default encoder escapes non-ASCII ids to \uXXXX, the two passes disagree, and the pair stays untransformed.
         var options = CustomIdOptions(n => $"тест-{n}");
         var json = await Serialize(SharedPair(out _), options);
 
@@ -153,8 +141,7 @@ internal class JsonReferenceTransformerEdgeTests
     [Test]
     public async Task NonAsciiIds_RelaxedEncoder_AreRewrittenToPointers()
     {
-        // With UnsafeRelaxedJsonEscaping the same ids stay raw UTF-8, so both passes see identical
-        // bytes and the transform works.
+        // UnsafeRelaxedJsonEscaping keeps the same ids raw UTF-8, so both passes see identical bytes.
         var options = CustomIdOptions(n => $"тест-{n}");
         options.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
         var json = await Serialize(SharedPair(out _), options);
@@ -212,8 +199,7 @@ internal class JsonReferenceTransformerEdgeTests
     [Test]
     public async Task DollarPrefixedPayloadProperty_BehavesAsRegularProperty()
     {
-        // "$custom" is no metadata name, so it behaves as a plain property and appears in pointer
-        // paths unescaped — '$' needs no RFC 6901 escaping.
+        // "$custom" is not metadata; '$' needs no RFC 6901 escaping in pointer paths.
         var shared = new Node { Name = "shared" };
         var graph = new DollarNameGraph { Custom = [shared], Echo = shared };
 
@@ -256,11 +242,9 @@ internal class JsonReferenceTransformerEdgeTests
     [Test]
     public async Task ManyReferencedIds_PastRatchetThreshold_AllRewritten()
     {
-        // 4200 distinct referenced ids: crosses the 4096 referenced-id ratchet, spills the
-        // stack-first id builder into the pool and spans multiple bitmap words.
+        // 4200 ids: crosses the 4096 ratchet, spills the stack-first builder into the pool, spans multiple bitmap words.
         var nodes = Enumerable.Range(0, 4_200).Select(i => new Node { Name = $"n{i}" }).ToArray();
-        // Distinct array instances so each NODE is re-referenced (one shared array would collapse
-        // the whole thing into a single array-level $ref).
+        // Distinct array instances — one shared array would collapse into a single array-level $ref.
         var graph = new ManyRefsGraph { First = nodes, Second = [.. nodes] };
 
         var json = await Serialize(graph, PreserveOptions);
@@ -274,8 +258,7 @@ internal class JsonReferenceTransformerEdgeTests
     [Test]
     public async Task LongUnreferencedWrapperId_IsReemittedBeforeValues()
     {
-        // A List wrapper's $id must survive the unreferenced-id drop (STJ needs $id before $values
-        // on deserialize), including ids too long for the stack scratch buffer.
+        // Wrapper $id must survive the unreferenced-id drop (STJ needs it before $values), even ids past the stack scratch.
         var options = CustomIdOptions(n => new string('a', 80) + n.ToString(System.Globalization.CultureInfo.InvariantCulture));
         var graph = new ListGraph { Solo = [new Node { Name = "x" }] };
 

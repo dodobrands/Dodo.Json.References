@@ -7,42 +7,47 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   publish:
-    name: publish-nuget
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+    environment: nuget-org
     env:
       DOTNET_NOLOGO: true
       DOTNET_CLI_TELEMETRY_OPTOUT: true
     steps:
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/checkout@v6.0.2
+
+      - uses: actions/setup-dotnet@v5.1.0
         with:
           dotnet-version: "10.0.x"
 
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Prepare to install packages
-        run: |
-          dotnet nuget add source --username USERNAME --password ${{ secrets.PACKAGES_TOKEN }} --store-password-in-clear-text --name github "${{ secrets.NUGET_SOURCE }}"
-
-      - name: Restore
-        run: dotnet restore Dodo.Json.References.slnx
-
-      - name: Test
+      - name: dotnet test
         run: dotnet test tests/Dodo.Json.References.Tests -c Release
 
       - name: Get the version
         id: get_version
-        run: echo VERSION=${GITHUB_REF/refs\/tags\/v/} >> $GITHUB_OUTPUT
+        run: echo "VERSION=${GITHUB_REF/refs\/tags\/v/}" >> "$GITHUB_OUTPUT"
 
-      - name: Publish
+      - name: dotnet pack
         env:
           VERSION: ${{ steps.get_version.outputs.VERSION }}
-          NUGET_SOURCE: ${{ secrets.NUGET_SOURCE }}
-          GITHUB_TOKEN_VALUE: ${{ secrets.GITHUB_TOKEN }}
+        run: dotnet pack src/Dodo.Json.References/Dodo.Json.References.csproj -c Release /p:Version="$VERSION" --output nupkgs
+
+      - name: NuGet trusted-publisher login
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: dotnet nuget push
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: |
-          dotnet pack src/Dodo.Json.References/Dodo.Json.References.csproj -c Release /p:Version="$VERSION"
-          dotnet nuget push src/Dodo.Json.References/bin/Release/Dodo.Json.References."$VERSION".nupkg --source "$NUGET_SOURCE" --api-key "$GITHUB_TOKEN_VALUE"
+          dotnet nuget push "nupkgs/*.nupkg" \
+            --source https://api.nuget.org/v3/index.json \
+            --api-key "$NUGET_API_KEY"

@@ -4,10 +4,7 @@ using Microsoft.Extensions.ObjectPool;
 
 namespace Dodo.Json.References;
 
-/// <summary>
-/// Deserialize twin of <see cref="PooledReferenceSerializer{T}"/>; each retained lease pins a warm
-/// type-info graph and a payload-sized resolver map, so keep maxRetained low for per-prefix instances.
-/// </summary>
+/// <summary>Each retained lease pins a warm type-info graph and a payload-sized resolver map; keep maxRetained low when creating many instances.</summary>
 public sealed class PooledReferenceDeserializer<T>
 {
     private readonly ObjectPool<ReferenceLease<T>> _pool;
@@ -18,10 +15,7 @@ public sealed class PooledReferenceDeserializer<T>
     {
     }
 
-    /// <remarks>
-    /// Base options are snapshotted (later mutations not observed); the first lease is built eagerly
-    /// for fail-fast and a warm type-info graph.
-    /// </remarks>
+    /// <remarks>Base options are snapshotted — later mutations are not observed; the first lease is built eagerly (fail-fast).</remarks>
     public PooledReferenceDeserializer(
         JsonSerializerOptions baseOptions,
         Func<JsonSerializerOptions, JsonTypeInfo<T>> typeInfoFactory,

@@ -4,10 +4,7 @@ using Microsoft.Extensions.ObjectPool;
 
 namespace Dodo.Json.References;
 
-/// <summary>
-/// Pooled (reference resolver + warm <see cref="JsonTypeInfo{T}"/>) pair: reusing them keeps the
-/// type-info graph and the resolver's payload-sized maps alive across multi-MB operations.
-/// </summary>
+/// <summary>Pooled (resolver + warm <see cref="JsonTypeInfo{T}"/>) pair; reuse keeps the type-info graph and payload-sized maps alive.</summary>
 internal sealed class ReferenceLease<T>
 {
     public PoolingReferenceResolver Resolver { get; } = new();

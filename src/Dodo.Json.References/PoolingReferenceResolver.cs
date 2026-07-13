@@ -9,7 +9,6 @@ public sealed class PoolingReferenceResolver : ReferenceResolver
 {
     private static readonly string?[] NumberCache = new string[65_536];
     private readonly Dictionary<string, object> _referenceIdToObjectMap = new();
-    // GetReference runs once per tracked object; see IdentityIdMap for why it beats Dictionary here.
     private readonly IdentityIdMap _objectToReferenceIdMap = new();
 
     public override void AddReference(string referenceId, object value)

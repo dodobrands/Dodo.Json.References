@@ -5,10 +5,6 @@ using NUnit.Framework;
 
 namespace Dodo.Json.References.Tests;
 
-/// <summary>
-/// Pooling infrastructure behind the reference serializer: the whole-document buffer writer, the
-/// pooled resolver's tracking rules and the shared dictionary pool.
-/// </summary>
 [TestFixture]
 internal class PooledInfrastructureTests
 {

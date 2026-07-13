@@ -6,11 +6,6 @@ using NUnit.Framework;
 
 namespace Dodo.Json.References.Tests;
 
-/// <summary>
-/// End-to-end behaviors of the public surface: output shaping (indentation, wrapper re-emit,
-/// element indexes, escaped names), buffer growth, incremental writing, pooled reuse under
-/// concurrency and the source-generated type-info path.
-/// </summary>
 [TestFixture]
 internal class SerializationBehaviorTests
 {

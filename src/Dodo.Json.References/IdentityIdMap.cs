@@ -3,11 +3,7 @@ using System.Runtime.CompilerServices;
 
 namespace Dodo.Json.References;
 
-/// <summary>
-/// Identity-keyed object-to-sequential-id map: open addressing, null key = free slot, no deletions.
-/// Beats Dictionary + ReferenceEqualityComparer ~25%/object — no interface-dispatched comparer,
-/// no bucket hop, and the miss claims its slot in the same probe.
-/// </summary>
+/// <summary>Open-addressing identity-to-sequential-id map (null slot = free, no deletions); ~25% faster than Dictionary + ReferenceEqualityComparer.</summary>
 internal sealed class IdentityIdMap
 {
     private object?[] _keys;
@@ -34,7 +30,6 @@ internal sealed class IdentityIdMap
         _count = 0;
     }
 
-    /// <summary>Returns the issued id for <paramref name="key"/> or issues the next sequential one.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public uint GetOrAdd(object key, out bool existed)
     {
