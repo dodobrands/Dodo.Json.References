@@ -9,8 +9,7 @@ namespace Dodo.Json.References.Tests;
 [TestFixture]
 internal class PooledReferenceSerializerTests
 {
-    // Left and Right intentionally point at one shared Node instance, so the payload carries a back
-    // reference that a correct deserialize must re-link to a single instance.
+    // Left and Right share one Node instance, so a correct deserialize must re-link them to a single object.
     internal sealed class Node
     {
         public string Name { get; set; } = string.Empty;
@@ -34,9 +33,7 @@ internal class PooledReferenceSerializerTests
     [Test]
     public async Task MutatingBaseOptionsAfterConstruction_DoesNotAffectOutput()
     {
-        // Leases are created lazily as concurrency grows; the serializer must snapshot the base
-        // options at construction so a caller mutating its instance afterwards cannot produce
-        // leases with different settings than the first one.
+        // Leases are built lazily, so a snapshot at construction is what keeps later mutations out of them.
         var options = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -54,7 +51,6 @@ internal class PooledReferenceSerializerTests
     [Test]
     public void ThrowingTypeInfoFactory_FailsAtConstruction()
     {
-        // A misconfigured serializer must fail where it is built, not on the first request.
         Assert.Throws<InvalidOperationException>(() =>
             _ = new PooledReferenceSerializer<Graph>(
                 BaseOptions(),
@@ -88,8 +84,7 @@ internal class PooledReferenceSerializerTests
     public async Task DeserializerReuseDoesNotLeakState()
     {
         var serializer = new PooledReferenceSerializer<Graph>(BaseOptions());
-        // maxRetained of one forces the single lease and its resolver to be reused on every read after the
-        // first, so a missed reset would leave stale reference ids and the next read would fail on a duplicate.
+        // maxRetained 1 forces resolver reuse: a missed reset would leave stale ids and fail the next read.
         var deserializer = new PooledReferenceDeserializer<Graph>(BaseOptions(), maxRetained: 1);
 
         var bytes = await Serialize(serializer, SharedRefGraph());

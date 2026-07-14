@@ -2,7 +2,7 @@ namespace Dodo.Json.References;
 
 internal static class InterlockedMath
 {
-    // Monotonic max: a stale reader can never regress a learned high-water mark.
+    // CAS loop: a check-then-write max lets a stale reader regress the high-water mark.
     public static void Max(ref int location, int value)
     {
         var observed = Volatile.Read(ref location);

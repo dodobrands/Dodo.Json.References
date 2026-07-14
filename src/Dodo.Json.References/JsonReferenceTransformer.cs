@@ -15,7 +15,7 @@ public static class JsonReferenceTransformer
     // Covers the reader's default MaxDepth of 64; deeper documents spill into pooled growth.
     private const int StackAllocPathDepth = 80;
 
-    // One per-document scratch reused across BuildCurrentPath calls; zero-init paid once.
+    // Hoisted to one per-document scratch: zero-init is paid once, not per path.
     private const int PathScratchSize = 512;
 
     private const int StackAllocIdCount = 128;

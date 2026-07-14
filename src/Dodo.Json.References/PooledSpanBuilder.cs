@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 
 namespace Dodo.Json.References;
 
-/// <summary>Stack-first growable buffer spilling to the shared ArrayPool; growFloor lands the first pool hop at a learned high-water mark.</summary>
+/// <summary>Stack-first buffer spilling to the shared ArrayPool; growFloor lands the first pool hop at a learned high-water mark.</summary>
 internal ref struct PooledSpanBuilder<T>(Span<T> initialBuffer, int growFloor = 0)
 {
     private Span<T> _buffer = initialBuffer;

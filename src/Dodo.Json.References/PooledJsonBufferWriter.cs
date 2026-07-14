@@ -3,7 +3,7 @@ using System.Numerics;
 
 namespace Dodo.Json.References;
 
-/// <summary>Whole-document ArrayPool buffer renting at a learned high-water hint: the first document pays the grow ladder once.</summary>
+/// <summary>Whole-document ArrayPool buffer: the first document pays the grow ladder, later rents start at the learned high-water hint.</summary>
 internal sealed class PooledJsonBufferWriter: IBufferWriter<byte>, IDisposable
 {
     private const int InitialCapacity = 64 * 1024;

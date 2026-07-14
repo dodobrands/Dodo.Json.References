@@ -19,7 +19,6 @@ internal class PooledInfrastructureTests
         "def"u8.CopyTo(writer.GetMemory(3).Span);
         writer.Advance(3);
 
-        // A non-positive size hint still hands out at least one writable byte.
         var tail = writer.GetSpan(0);
         tail.Length.Should().BeGreaterThan(0);
         tail[0] = (byte)'!';
@@ -55,7 +54,6 @@ internal class PooledInfrastructureTests
         resolver.GetReference(first, out var firstAgainExists).Should().Be("1");
         firstAgainExists.Should().BeTrue();
 
-        // Boxed value types compare by content, so tracking them would produce false shared refs.
         resolver.GetReference(42, out var boxedExists).Should().BeEmpty();
         boxedExists.Should().BeFalse();
         resolver.GetReference(42, out boxedExists).Should().BeEmpty();

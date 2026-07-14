@@ -118,7 +118,6 @@ internal class JsonReferenceTransformerEdgeTests
     [Test]
     public async Task DanglingRef_KeepsOriginalIdValue()
     {
-        // $ref without any matching $id must pass the opaque id through untouched.
         var options = CustomIdOptions(n => n.ToString(System.Globalization.CultureInfo.InvariantCulture), alwaysExists: true);
         var json = await Serialize(new Pair { Left = new Node { Name = "a" } }, options);
 
@@ -141,7 +140,7 @@ internal class JsonReferenceTransformerEdgeTests
     [Test]
     public async Task NonAsciiIds_RelaxedEncoder_AreRewrittenToPointers()
     {
-        // UnsafeRelaxedJsonEscaping keeps the same ids raw UTF-8, so both passes see identical bytes.
+        // Relaxed escaping keeps the ids raw UTF-8, so both passes see identical bytes.
         var options = CustomIdOptions(n => $"тест-{n}");
         options.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
         var json = await Serialize(SharedPair(out _), options);

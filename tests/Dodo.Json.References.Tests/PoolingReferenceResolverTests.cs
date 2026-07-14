@@ -29,7 +29,6 @@ internal class PoolingReferenceResolverTests
         writeAfter.Should().Be(writeBefore);
     }
 
-    // Tens-of-thousands-scale capacity must survive Reset untouched.
     [Test]
     public void ResetKeepsCapacityOfMenuScaleMaps()
     {
