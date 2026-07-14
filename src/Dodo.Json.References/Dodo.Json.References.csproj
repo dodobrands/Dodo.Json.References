@@ -1,14 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
         <PackageId>Dodo.Json.References</PackageId>
-        <Description>Pooled System.Text.Json reference serialization: a streaming $id/$ref to JSON Pointer transformer plus reusable (options + reference resolver) leases for large documents.</Description>
+        <Version Condition="'$(Version)' == ''">0.0.0-local</Version>
+        <Description>High-performance System.Text.Json serialization and deserialization for large reference-preserving object graphs, with pooling and streaming conversion of ReferenceHandler.Preserve $id/$ref metadata to RFC 6901 JSON Pointers.</Description>
         <PackageTags>json;system.text.json;serialization;json-pointer;rfc6901;references;pooling;performance</PackageTags>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <PackageReadmeFile>README.md</PackageReadmeFile>
-        <IsPackable>true</IsPackable>
         <IncludeSymbols>true</IncludeSymbols>
         <SymbolPackageFormat>snupkg</SymbolPackageFormat>
         <IsAotCompatible>true</IsAotCompatible>
+        <EnablePackageValidation>true</EnablePackageValidation>
     </PropertyGroup>
 
     <ItemGroup>
@@ -16,16 +17,11 @@
     </ItemGroup>
 
     <ItemGroup>
-        <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
-            <_Parameter1>Dodo.Json.References.Tests</_Parameter1>
-        </AssemblyAttribute>
+        <InternalsVisibleTo Include="Dodo.Json.References.Tests" />
     </ItemGroup>
 
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.ObjectPool" />
-        <PackageReference Include="SonarAnalyzer.CSharp">
-          <PrivateAssets>all</PrivateAssets>
-          <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
-        </PackageReference>
+        <PackageReference Include="SonarAnalyzer.CSharp" PrivateAssets="all" />
     </ItemGroup>
 </Project>
