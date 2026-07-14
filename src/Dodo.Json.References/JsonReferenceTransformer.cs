@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO.Pipelines;
 using System.Numerics;
@@ -51,6 +52,9 @@ public static class JsonReferenceTransformer
 
     private static readonly byte[] RootPathBytes = [.. "\"#\""u8];
 
+    private const string ReflectionSerializationMessage =
+        "Serializing from JsonSerializerOptions resolves metadata by reflection; use the JsonTypeInfo<T> overload under trimming or Native AOT.";
+
     // Negative PropertyNameOffset = nameless segment ($values wrapper or array-in-array): contributes only its index.
     [StructLayout(LayoutKind.Sequential)]
     private struct PathSegment
@@ -61,67 +65,92 @@ public static class JsonReferenceTransformer
         public bool IsArray;
     }
 
+    /// <summary>Serializes <paramref name="payload"/> to <paramref name="output"/> with every <c>$id</c>/<c>$ref</c> rewritten to an RFC 6901 JSON Pointer.</summary>
+    [RequiresUnreferencedCode(ReflectionSerializationMessage)]
+    [RequiresDynamicCode(ReflectionSerializationMessage)]
     public static async Task SerializeWithPointers<T>(
         T payload,
         Stream output,
         JsonSerializerOptions options,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(options);
+
         using var bufferWriter = new PooledJsonBufferWriter();
-        await using (var writer = new Utf8JsonWriter(bufferWriter, GetWriterOptions(options, indented: false)))
+        var writer = new Utf8JsonWriter(bufferWriter, GetWriterOptions(options, indented: false));
+        await using (writer.ConfigureAwait(false))
         {
             JsonSerializer.Serialize<T>(writer, payload, options);
         }
 
-        await TransformToStream(bufferWriter.WrittenMemory, output, options, ct);
+        await TransformToStream(bufferWriter.WrittenMemory, output, options, ct).ConfigureAwait(false);
     }
 
+    /// <summary>Serializes <paramref name="payload"/> to <paramref name="output"/> with every <c>$id</c>/<c>$ref</c> rewritten to an RFC 6901 JSON Pointer.</summary>
     public static async Task SerializeWithPointers<T>(
         T payload,
         Stream output,
         JsonTypeInfo<T> typeInfo,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(typeInfo);
+
         using var bufferWriter = new PooledJsonBufferWriter();
         var options = typeInfo.Options;
-        await using (var writer = new Utf8JsonWriter(bufferWriter, GetWriterOptions(options, indented: false)))
+        var writer = new Utf8JsonWriter(bufferWriter, GetWriterOptions(options, indented: false));
+        await using (writer.ConfigureAwait(false))
         {
             JsonSerializer.Serialize(writer, payload, typeInfo);
         }
 
-        await TransformToStream(bufferWriter.WrittenMemory, output, options, ct);
+        await TransformToStream(bufferWriter.WrittenMemory, output, options, ct).ConfigureAwait(false);
     }
 
+    /// <summary>Serializes <paramref name="payload"/> to <paramref name="output"/> with every <c>$id</c>/<c>$ref</c> rewritten to an RFC 6901 JSON Pointer.</summary>
+    /// <remarks>Standalone <see cref="Pipe"/> callers must call <see cref="PipeWriter.Complete"/> afterwards; ASP.NET Core completes <c>HttpResponse.BodyWriter</c> itself.</remarks>
+    [RequiresUnreferencedCode(ReflectionSerializationMessage)]
+    [RequiresDynamicCode(ReflectionSerializationMessage)]
+    public static async Task SerializeWithPointers<T>(
+        T payload,
+        PipeWriter output,
+        JsonSerializerOptions options,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(options);
+
+        using var bufferWriter = new PooledJsonBufferWriter();
+        var writer = new Utf8JsonWriter(bufferWriter, GetWriterOptions(options, indented: false));
+        await using (writer.ConfigureAwait(false))
+        {
+            JsonSerializer.Serialize<T>(writer, payload, options);
+        }
+
+        await TransformToPipe(bufferWriter.WrittenMemory, output, options, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Serializes <paramref name="payload"/> to <paramref name="output"/> with every <c>$id</c>/<c>$ref</c> rewritten to an RFC 6901 JSON Pointer.</summary>
     /// <remarks>Standalone <see cref="Pipe"/> callers must call <see cref="PipeWriter.Complete"/> afterwards; ASP.NET Core completes <c>HttpResponse.BodyWriter</c> itself.</remarks>
     public static async Task SerializeWithPointers<T>(
         T payload,
         PipeWriter output,
-        JsonSerializerOptions options,
-        CancellationToken ct = default)
-    {
-        using var bufferWriter = new PooledJsonBufferWriter();
-        await using (var writer = new Utf8JsonWriter(bufferWriter, GetWriterOptions(options, indented: false)))
-        {
-            JsonSerializer.Serialize<T>(writer, payload, options);
-        }
-
-        await TransformToPipe(bufferWriter.WrittenMemory, output, options, ct);
-    }
-
-    public static async Task SerializeWithPointers<T>(
-        T payload,
-        PipeWriter output,
         JsonTypeInfo<T> typeInfo,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(typeInfo);
+
         using var bufferWriter = new PooledJsonBufferWriter();
         var options = typeInfo.Options;
-        await using (var writer = new Utf8JsonWriter(bufferWriter, GetWriterOptions(options, indented: false)))
+        var writer = new Utf8JsonWriter(bufferWriter, GetWriterOptions(options, indented: false));
+        await using (writer.ConfigureAwait(false))
         {
             JsonSerializer.Serialize(writer, payload, typeInfo);
         }
 
-        await TransformToPipe(bufferWriter.WrittenMemory, output, options, ct);
+        await TransformToPipe(bufferWriter.WrittenMemory, output, options, ct).ConfigureAwait(false);
     }
 
     private static JsonWriterOptions GetWriterOptions(JsonSerializerOptions options)
@@ -150,11 +179,11 @@ public static class JsonReferenceTransformer
         var pipeWriter = PipeWriter.Create(output, StreamOutputOptions);
         try
         {
-            await TransformToPipe(jsonBytes, pipeWriter, options, ct);
+            await TransformToPipe(jsonBytes, pipeWriter, options, ct).ConfigureAwait(false);
         }
         finally
         {
-            await pipeWriter.CompleteAsync();
+            await pipeWriter.CompleteAsync().ConfigureAwait(false);
         }
     }
 
@@ -164,13 +193,14 @@ public static class JsonReferenceTransformer
         JsonSerializerOptions options,
         CancellationToken ct)
     {
-        await using (var writer = new Utf8JsonWriter(output, GetWriterOptions(options)))
+        var writer = new Utf8JsonWriter(output, GetWriterOptions(options));
+        await using (writer.ConfigureAwait(false))
         {
-            await TransformCore(jsonBytes, writer, options.MaxDepth, ct);
+            await TransformCore(jsonBytes, writer, options.MaxDepth, ct).ConfigureAwait(false);
         }
 
         // Utf8JsonWriter.DisposeAsync with IBufferWriter only calls Advance(), not FlushAsync()
-        await output.FlushAsync(ct);
+        await output.FlushAsync(ct).ConfigureAwait(false);
     }
 
     private static ValueTask TransformCore(

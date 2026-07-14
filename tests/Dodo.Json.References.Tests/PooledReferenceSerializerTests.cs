@@ -1,13 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
-using Dodo.Json.References;
 using FluentAssertions;
 using NUnit.Framework;
 
 namespace Dodo.Json.References.Tests;
 
 [TestFixture]
-internal class PooledReferenceSerializerTests
+internal sealed class PooledReferenceSerializerTests
 {
     // Left and Right share one Node instance, so a correct deserialize must re-link them to a single object.
     internal sealed class Node

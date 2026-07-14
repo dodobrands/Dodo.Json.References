@@ -2,14 +2,13 @@ using System.IO.Pipelines;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Dodo.Json.References;
 using FluentAssertions;
 using NUnit.Framework;
 
 namespace Dodo.Json.References.Tests;
 
 [TestFixture]
-internal class JsonReferenceTransformerEdgeTests
+internal sealed class JsonReferenceTransformerEdgeTests
 {
     private static readonly JsonSerializerOptions PreserveOptions = new()
     {

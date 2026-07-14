@@ -1,13 +1,12 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Dodo.Json.References;
 using FluentAssertions;
 using NUnit.Framework;
 
 namespace Dodo.Json.References.Tests;
 
 [TestFixture]
-internal class JsonReferenceTransformerPathTests
+internal sealed class JsonReferenceTransformerPathTests
 {
     private static readonly JsonSerializerOptions Options = new()
     {

@@ -26,12 +26,13 @@ public sealed class PooledReferenceSerializer<T>
         _pool.Return(_pool.Get());
     }
 
+    /// <summary>Serializes <paramref name="payload"/> to <paramref name="output"/> with every <c>$id</c>/<c>$ref</c> rewritten to an RFC 6901 JSON Pointer.</summary>
     public async Task SerializeWithPointers(T payload, Stream output, CancellationToken ct = default)
     {
         var lease = _pool.Get();
         try
         {
-            await JsonReferenceTransformer.SerializeWithPointers(payload, output, lease.TypeInfo, ct);
+            await JsonReferenceTransformer.SerializeWithPointers(payload, output, lease.TypeInfo, ct).ConfigureAwait(false);
         }
         finally
         {
@@ -39,12 +40,14 @@ public sealed class PooledReferenceSerializer<T>
         }
     }
 
+    /// <summary>Serializes <paramref name="payload"/> to <paramref name="output"/> with every <c>$id</c>/<c>$ref</c> rewritten to an RFC 6901 JSON Pointer.</summary>
+    /// <remarks>Standalone <see cref="Pipe"/> callers must call <see cref="PipeWriter.Complete"/> afterwards; ASP.NET Core completes <c>HttpResponse.BodyWriter</c> itself.</remarks>
     public async Task SerializeWithPointers(T payload, PipeWriter output, CancellationToken ct = default)
     {
         var lease = _pool.Get();
         try
         {
-            await JsonReferenceTransformer.SerializeWithPointers(payload, output, lease.TypeInfo, ct);
+            await JsonReferenceTransformer.SerializeWithPointers(payload, output, lease.TypeInfo, ct).ConfigureAwait(false);
         }
         finally
         {
