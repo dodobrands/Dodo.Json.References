@@ -2,14 +2,12 @@
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
         <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-        <!-- A newly published advisory must not break builds that changed nothing; Dependabot raises the bump. -->
         <WarningsNotAsErrors>NU1901;NU1902;NU1903</WarningsNotAsErrors>
         <ImplicitUsings>enable</ImplicitUsings>
         <LangVersion>14.0</LangVersion>
         <Nullable>enable</Nullable>
         <AnalysisMode>All</AnalysisMode>
         <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
-        <!-- IDE0005 (unnecessary usings) only runs on build where a documentation file is generated: dotnet/roslyn#41640. -->
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
     </PropertyGroup>
 
