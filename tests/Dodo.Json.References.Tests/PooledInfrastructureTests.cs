@@ -1,12 +1,11 @@
 using System.Text.Json;
-using Dodo.Json.References;
 using FluentAssertions;
 using NUnit.Framework;
 
 namespace Dodo.Json.References.Tests;
 
 [TestFixture]
-internal class PooledInfrastructureTests
+internal sealed class PooledInfrastructureTests
 {
     [Test]
     public void PooledJsonBufferWriter_GetSpanAndGetMemory_AccumulateWrites()

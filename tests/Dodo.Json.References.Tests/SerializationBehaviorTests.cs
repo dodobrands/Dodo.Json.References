@@ -7,7 +7,7 @@ using NUnit.Framework;
 namespace Dodo.Json.References.Tests;
 
 [TestFixture]
-internal class SerializationBehaviorTests
+internal sealed class SerializationBehaviorTests
 {
     private static readonly JsonSerializerOptions PreserveOptions = new()
     {

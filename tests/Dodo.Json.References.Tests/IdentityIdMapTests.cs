@@ -1,4 +1,3 @@
-using Dodo.Json.References;
 using FluentAssertions;
 using NUnit.Framework;
 
@@ -7,7 +6,7 @@ using NUnit.Framework;
 namespace Dodo.Json.References.Tests;
 
 [TestFixture]
-internal class IdentityIdMapTests
+internal sealed class IdentityIdMapTests
 {
     [Test]
     public void DegenerateCapacitiesFloorAtMinimumSize()

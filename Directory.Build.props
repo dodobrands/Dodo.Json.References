@@ -2,10 +2,25 @@
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
         <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+        <!-- A newly published advisory must not break builds that changed nothing; Dependabot raises the bump. -->
+        <WarningsNotAsErrors>NU1901;NU1902;NU1903</WarningsNotAsErrors>
         <ImplicitUsings>enable</ImplicitUsings>
         <LangVersion>14.0</LangVersion>
         <Nullable>enable</Nullable>
         <AnalysisMode>All</AnalysisMode>
-        <NoWarn>CA1861,CA1848,CA1707,CA2007,CA1014,CA1716,CA1034,CA1725,CA1062,CA1032,CA5398,CA1812,CA1816,CA1063,CA1822,CA1852,NU1507</NoWarn>
+        <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+        <!-- IDE0005 (unnecessary usings) only runs on build where a documentation file is generated: dotnet/roslyn#41640. -->
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    </PropertyGroup>
+
+    <PropertyGroup Label="Package identity">
+        <Company>Dodo Brands</Company>
+        <Authors>Dodo Brands</Authors>
+        <RepositoryType>git</RepositoryType>
+        <RepositoryUrl>https://github.com/dodobrands/Dodo.Json.References</RepositoryUrl>
+        <PackageProjectUrl>https://github.com/dodobrands/Dodo.Json.References</PackageProjectUrl>
+        <PublishRepositoryUrl>true</PublishRepositoryUrl>
+        <EmbedUntrackedSources>true</EmbedUntrackedSources>
+        <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
     </PropertyGroup>
 </Project>

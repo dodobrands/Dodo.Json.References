@@ -1,11 +1,10 @@
-using Dodo.Json.References;
 using FluentAssertions;
 using NUnit.Framework;
 
 namespace Dodo.Json.References.Tests;
 
 [TestFixture]
-internal class PooledSpanBuilderTests
+internal sealed class PooledSpanBuilderTests
 {
     [Test]
     public void GrowsFromStackScratchPreservingContent()

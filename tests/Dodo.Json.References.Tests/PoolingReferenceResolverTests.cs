@@ -1,11 +1,10 @@
-using Dodo.Json.References;
 using FluentAssertions;
 using NUnit.Framework;
 
 namespace Dodo.Json.References.Tests;
 
 [TestFixture]
-internal class PoolingReferenceResolverTests
+internal sealed class PoolingReferenceResolverTests
 {
     // Reset must retain the grown backing arrays; trimming would regrow them on every pooled cycle.
     [Test]

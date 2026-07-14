@@ -25,12 +25,13 @@ public sealed class PooledReferenceDeserializer<T>
         _pool.Return(_pool.Get());
     }
 
+    /// <summary>Deserializes a document written in the native <c>$id</c>/<c>$ref</c> form; JSON Pointer output is not readable back.</summary>
     public async ValueTask<T?> Deserialize(Stream input, CancellationToken ct = default)
     {
         var lease = _pool.Get();
         try
         {
-            return await JsonSerializer.DeserializeAsync(input, lease.TypeInfo, ct);
+            return await JsonSerializer.DeserializeAsync(input, lease.TypeInfo, ct).ConfigureAwait(false);
         }
         finally
         {
