@@ -1,0 +1,50 @@
+name: tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A push run tests the branch head, a pull_request run tests it merged into main; never cancel main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test:
+    name: build-and-test
+    runs-on: ubuntu-latest
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    steps:
+      - uses: actions/setup-dotnet@baa11fbfe1d6520db94683bd5c7a3818018e4309 # v5.1.0
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Restore Nuget cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.0.0
+        with:
+          path: ~/.nuget/packages
+          key: nugetcache-${{ hashFiles('Directory.Packages.props') }}
+          restore-keys: |
+            nugetcache-
+
+      - name: Restore
+        run: dotnet restore Dodo.Json.References.slnx
+
+      - name: Build
+        run: dotnet build Dodo.Json.References.slnx -c Release --no-restore
+
+      - name: Test
+        run: dotnet test tests/Dodo.Json.References.Tests -c Release --no-build

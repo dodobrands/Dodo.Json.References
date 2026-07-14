@@ -1,0 +1,62 @@
+name: publish
+
+on:
+  push:
+    tags:
+      - "v[0-9]*"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+    environment: nuget-org
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@baa11fbfe1d6520db94683bd5c7a3818018e4309 # v5.1.0
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: dotnet test
+        run: dotnet test tests/Dodo.Json.References.Tests -c Release
+
+      - name: Get the version
+        id: get_version
+        # A published nuget.org version is permanent: reject a malformed tag before packing, not after pushing.
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
+            echo "::error::'$GITHUB_REF_NAME' is not a version tag (v1.2.3 or v1.2.3-rc1)"
+            exit 1
+          }
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: dotnet pack
+        env:
+          VERSION: ${{ steps.get_version.outputs.VERSION }}
+        run: dotnet pack src/Dodo.Json.References/Dodo.Json.References.csproj -c Release /p:Version="$VERSION" --output nupkgs
+
+      - name: NuGet trusted-publisher login
+        id: nuget-login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.0.0
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: dotnet nuget push
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        run: |
+          dotnet nuget push "nupkgs/*.nupkg" \
+            --source https://api.nuget.org/v3/index.json \
+            --api-key "$NUGET_API_KEY"
