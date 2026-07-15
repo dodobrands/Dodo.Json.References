@@ -236,8 +236,14 @@ public static class JsonReferenceTransformer
 
         referencedIds.Dispose();
 
+        var trackedIdCount = 0;
+        for (var w = 0; w < bitmapWords; w++)
+        {
+            trackedIdCount += BitOperations.PopCount(referencedBitmap[w]);
+        }
+
         var idPaths = ArrayPool<byte[]?>.Shared.Rent((int)maxNumericId + 1);
-        Array.Clear(idPaths, 0, (int)maxNumericId + 1);
+        ClearTrackedIdPaths(idPaths, referencedBitmap, bitmapWords, maxNumericId, trackedIdCount);
 
         try
         {
@@ -487,8 +493,11 @@ public static class JsonReferenceTransformer
                         if (isRefProperty)
                         {
                             pendingPropertyOffset = -1;
+                            // The bit test keeps refs the pass-1 scan never saw (a converter's WriteRawValue can
+                            // emit "$ref" with arbitrary spacing) away from slots the sparse rent-clear skipped.
                             if (TryReadNumericId(ref reader, out var numericRefId)
                                 && numericRefId <= maxNumericId
+                                && (referencedBitmap[numericRefId >> 6] & (1UL << (int)numericRefId)) != 0
                                 && idPaths[numericRefId] is { } numericPath)
                             {
                                 writer.WriteRawValue(numericPath, skipInputValidation: true);
@@ -565,7 +574,7 @@ public static class JsonReferenceTransformer
                 ArrayPool<PathSegment>.Shared.Return(rentedPathStack);
             }
 
-            ClearWrittenIdPaths(idPaths, referencedBitmap, bitmapWords, maxNumericId);
+            ClearTrackedIdPaths(idPaths, referencedBitmap, bitmapWords, maxNumericId, trackedIdCount);
             ArrayPool<ulong>.Shared.Return(referencedBitmap);
             ArrayPool<byte[]?>.Shared.Return(idPaths);
         }
@@ -573,24 +582,18 @@ public static class JsonReferenceTransformer
         return ValueTask.CompletedTask;
     }
 
-    // Null the written (set-bit) slots or the pool keeps rooting the path arrays; dense bitmaps memset instead.
-    private static void ClearWrittenIdPaths(byte[]?[] idPaths, ulong[] referencedBitmap, int bitmapWords, uint maxNumericId)
+    // Null the tracked (set-bit) slots on rent and return; dense bitmaps memset instead.
+    private static void ClearTrackedIdPaths(byte[]?[] idPaths, ulong[] referencedBitmap, int bitmapWords, uint maxNumericId, int trackedIdCount)
     {
-        var setBits = 0;
-        for (var w = 0; w < bitmapWords; w++)
-        {
-            setBits += BitOperations.PopCount(referencedBitmap[w]);
-        }
-
         // Measured crossover: ~1/16-1/8 density on 128B-line arm64, higher on 64B-line x64; a too-low
         // threshold costs a full-range memset on large sparse ranges, so 1/8 errs on the cheap side.
-        if (setBits > (int)(maxNumericId >> 3))
+        if (trackedIdCount > (int)(maxNumericId >> 3))
         {
             Array.Clear(idPaths, 0, (int)maxNumericId + 1);
         }
         else
         {
-            // Set bits are exactly the written slots (idPaths is only ever touched at set-bit indexes).
+            // Set bits cover every slot pass 2 can touch (a dangling $ref's slot is tracked but never written).
             for (var w = 0; w < bitmapWords; w++)
             {
                 var word = referencedBitmap[w];

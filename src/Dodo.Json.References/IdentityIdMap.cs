@@ -26,6 +26,11 @@ internal sealed class IdentityIdMap
     // Clearing the keys releases the previous document's object roots; the grown arrays stay.
     public void Reset()
     {
+        if (_count == 0)
+        {
+            return;
+        }
+
         Array.Clear(_keys, 0, _keys.Length);
         _count = 0;
     }
