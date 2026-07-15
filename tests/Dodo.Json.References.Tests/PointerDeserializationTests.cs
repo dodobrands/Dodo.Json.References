@@ -15,7 +15,9 @@ internal sealed class PointerDeserializationTests
         ReferenceHandler = ReferenceHandler.Preserve
     };
 
-    private static readonly PooledReferenceDeserializer<Pair> PairDeserializer = new(PooledOptions());
+    private static readonly JsonSerializerOptions SharedPooledOptions = PooledOptions();
+
+    private static readonly PooledReferenceDeserializer<Pair> PairDeserializer = new(SharedPooledOptions);
 
     private static JsonSerializerOptions PooledOptions()
     {
@@ -40,6 +42,14 @@ internal sealed class PointerDeserializationTests
     {
         using var input = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json), writable: false);
         return await PairDeserializer.Deserialize(input);
+    }
+
+    // Round-trips read through the package's own resolver, not STJ's default one.
+    private static async Task<T?> DeserializePooled<T>(string json)
+    {
+        var deserializer = new PooledReferenceDeserializer<T>(SharedPooledOptions);
+        using var input = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json), writable: false);
+        return await deserializer.Deserialize(input);
     }
 
     internal sealed class Node
@@ -72,7 +82,7 @@ internal sealed class PointerDeserializationTests
         json.Should().Contain("\"$ref\":\"#/first\"", "the shared list is addressed by its wrapper position");
         json.Should().Contain("\"$ref\":\"#/first/0\"", "$values stays transparent in element paths");
 
-        var restored = JsonSerializer.Deserialize<TwoLists>(json, PreserveOptions)!;
+        var restored = (await DeserializePooled<TwoLists>(json))!;
         restored.Second.Should().BeSameAs(restored.First);
         restored.Echo.Should().BeSameAs(restored.First[0]);
     }
@@ -93,7 +103,7 @@ internal sealed class PointerDeserializationTests
         json.Should().Contain("\"$id\":\"#/outer/0\"", "the inner wrapper is addressed as an element of the outer list");
         json.Should().Contain("\"$ref\":\"#/outer/0\"");
 
-        var restored = JsonSerializer.Deserialize<NestedShared>(json, PreserveOptions)!;
+        var restored = (await DeserializePooled<NestedShared>(json))!;
         restored.Outer[1].Should().BeSameAs(restored.Outer[0]);
     }
 
@@ -120,7 +130,7 @@ internal sealed class PointerDeserializationTests
 
         json.Should().Contain("\"$ref\":\"#/members\"", "the cycle target is the collection wrapper itself");
 
-        var restored = JsonSerializer.Deserialize<Team>(json, PreserveOptions)!;
+        var restored = (await DeserializePooled<Team>(json))!;
         restored.Members[0].Roster.Should().BeSameAs(restored.Members);
     }
 
@@ -135,7 +145,7 @@ internal sealed class PointerDeserializationTests
         json.Should().Contain("\"$id\":\"#\"", "the referenced root wrapper keeps its id as the whole-document pointer");
         json.Should().Contain("\"$ref\":\"#\"");
 
-        var restored = JsonSerializer.Deserialize<List<Member>>(json, PreserveOptions)!;
+        var restored = (await DeserializePooled<List<Member>>(json))!;
         restored[0].Roster.Should().BeSameAs(restored);
     }
 
@@ -164,7 +174,7 @@ internal sealed class PointerDeserializationTests
         json.Should().Contain("\"$ref\":\"#/byCode/0\"");
         json.Should().Contain("\"$ref\":\"#/byCode/01\"");
 
-        var restored = JsonSerializer.Deserialize<Catalog>(json, PreserveOptions)!;
+        var restored = (await DeserializePooled<Catalog>(json))!;
         restored.EchoA.Should().BeSameAs(restored.ByCode["0"]);
         restored.EchoB.Should().BeSameAs(restored.ByCode["01"]);
     }
@@ -187,7 +197,7 @@ internal sealed class PointerDeserializationTests
         // A literal "~1" in the key must escape its '~' first, or unescaping would turn it into '/'.
         json.Should().Contain("\"$ref\":\"#/byCode/x~01y\"");
 
-        var restored = JsonSerializer.Deserialize<Catalog>(json, PreserveOptions)!;
+        var restored = (await DeserializePooled<Catalog>(json))!;
         restored.EchoA.Should().BeSameAs(restored.ByCode["a/b"]);
         restored.EchoB.Should().BeSameAs(restored.ByCode["x~1y"]);
     }
@@ -218,7 +228,7 @@ internal sealed class PointerDeserializationTests
         json.Should().Contain("\"$type\":\"circle\"", "the discriminator is payload, not reference metadata");
         json.Should().Contain("\"$ref\":\"#/a\"");
 
-        var restored = JsonSerializer.Deserialize<Drawing>(json, PreserveOptions)!;
+        var restored = (await DeserializePooled<Drawing>(json))!;
         restored.B.Should().BeSameAs(restored.A);
         restored.A.Should().BeOfType<Circle>().Which.Radius.Should().Be(2);
     }
@@ -254,5 +264,50 @@ internal sealed class PointerDeserializationTests
     {
         Assert.ThrowsAsync<JsonException>(async () => await DeserializePair(
             """{"left":{"$ref":"#/nowhere"}}"""));
+    }
+
+    [Test]
+    public void StaleIdFromPreviousDocument_DoesNotResolve()
+    {
+        // maxRetained 1 pins one lease across both reads; a missed Reset would silently link doc 2 to doc 1's object instead of throwing.
+        var deserializer = new PooledReferenceDeserializer<Pair>(SharedPooledOptions, maxRetained: 1);
+
+        Assert.DoesNotThrowAsync(async () =>
+        {
+            using var first = new MemoryStream("""{"left":{"$id":"#/left","name":"x"},"right":{"$ref":"#/left"}}"""u8.ToArray());
+            await deserializer.Deserialize(first);
+        });
+
+        Assert.ThrowsAsync<JsonException>(async () =>
+        {
+            using var second = new MemoryStream("""{"right":{"$ref":"#/left"}}"""u8.ToArray());
+            await deserializer.Deserialize(second);
+        });
+    }
+
+    [Test]
+    public async Task IdNotMatchingItsDocumentLocation_StillResolves()
+    {
+        // Ids are never checked against the document structure — matching is purely textual.
+        var restored = await DeserializePair(
+            """{"left":{"$id":"#/wrong/9999","name":"x"},"right":{"$ref":"#/wrong/9999"}}""");
+
+        restored!.Right.Should().BeSameAs(restored.Left);
+    }
+
+    [TestCase("#/items/-")] // dash: RFC 6901 append position, not a real index
+    [TestCase("#/items/01")] // leading zero: invalid as an RFC array index
+    [TestCase("#/items/4294967296")] // past int range
+    [TestCase("#/")] // trailing slash: empty trailing token
+    [TestCase("#//x")] // empty middle token
+    [TestCase("#/a~2b")] // malformed escape
+    [TestCase("")] // empty pointer: whole document in RFC terms
+    public async Task PointerSyntaxIsNeverValidated_ExoticIdsMatchByteForByte(string id)
+    {
+        // RFC 6901 evaluation would reject or re-interpret these; the resolver requires only byte-equal $id/$ref.
+        var restored = await DeserializePair(
+            $$$"""{"left":{"$id":"{{{id}}}","name":"x"},"right":{"$ref":"{{{id}}}"}}""");
+
+        restored!.Right.Should().BeSameAs(restored.Left);
     }
 }
