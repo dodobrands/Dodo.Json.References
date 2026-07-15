@@ -8,6 +8,12 @@ updates:
     groups:
       nuget:
         patterns: ["*"]
+    # The published dependency floor stays at the band minimum; update-type ignores do not suppress security updates.
+    ignore:
+      - dependency-name: Microsoft.Extensions.ObjectPool
+        update-types:
+          - version-update:semver-patch
+          - version-update:semver-minor
 
   # Keeps the SHA pins current; the repository requires actions to be pinned.
   - package-ecosystem: github-actions
