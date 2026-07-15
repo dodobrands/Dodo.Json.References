@@ -3,7 +3,7 @@
   "url": "https://context7.com/dodobrands/dodo.json.references",
   "public_key": "pk_0g7lNzmKG9SoyKjxddBqA",
   "projectTitle": "Dodo.Json.References",
-  "description": "High-performance System.Text.Json reference serialization for .NET: duplicates in an object graph become RFC 6901 JSON Pointer $ref entries; deserialization restores reference identity.",
+  "description": "High-performance System.Text.Json reference serialization for .NET: streams ReferenceHandler.Preserve $id/$ref metadata into RFC 6901 JSON Pointers, and deserializes back with reference identity preserved — pooled serializer/deserializer leases for large object graphs.",
   "folders": [],
   "excludeFolders": ["tests", ".github", ".worktrees"],
   "rules": [
