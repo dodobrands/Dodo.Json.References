@@ -25,7 +25,7 @@ public sealed class PooledReferenceDeserializer<T>
         _pool.Return(_pool.Get());
     }
 
-    /// <summary>Deserializes a document written in the native <c>$id</c>/<c>$ref</c> form; JSON Pointer output is not readable back.</summary>
+    /// <summary>Deserializes a Preserve-shaped document; ids match as opaque strings, so native <c>$id</c>/<c>$ref</c> and pointer-rewritten output both read back, provided every <c>$ref</c> follows its <c>$id</c>.</summary>
     public async ValueTask<T?> Deserialize(Stream input, CancellationToken ct = default)
     {
         var lease = _pool.Get();
