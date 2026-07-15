@@ -493,8 +493,11 @@ public static class JsonReferenceTransformer
                         if (isRefProperty)
                         {
                             pendingPropertyOffset = -1;
+                            // The bit test keeps refs the pass-1 scan never saw (a converter's WriteRawValue can
+                            // emit "$ref" with arbitrary spacing) away from slots the sparse rent-clear skipped.
                             if (TryReadNumericId(ref reader, out var numericRefId)
                                 && numericRefId <= maxNumericId
+                                && (referencedBitmap[numericRefId >> 6] & (1UL << (int)numericRefId)) != 0
                                 && idPaths[numericRefId] is { } numericPath)
                             {
                                 writer.WriteRawValue(numericPath, skipInputValidation: true);

@@ -127,16 +127,58 @@ internal sealed class JsonReferenceTransformerEdgeTests
     [Test]
     public async Task PooledArrayReuse_DanglingRefDoesNotSeePreviousDocumentPointer()
     {
-        // Doc 1 writes a pointer into idPaths slot 1 and returns the array to the pool.
-        var numericIds = CustomIdOptions(n => n.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        (await Serialize(SharedPair(out _), numericIds)).Should().Contain("\"$id\":\"#/left\"");
+        // Doc 1: the self-referencing root keeps $id 1, writing the root pointer into idPaths slot 1.
+        var cycle = new Cyclic { Name = "c" };
+        cycle.Self = cycle;
+        (await Serialize(cycle, PreserveOptions)).Should().Contain("\"$id\":\"#\"");
 
         // Doc 2 rents the same slot range with id 1 dangling: the slot must read null, not doc 1's pointer.
         var dangling = CustomIdOptions(n => n.ToString(System.Globalization.CultureInfo.InvariantCulture), alwaysExists: true);
         var json = await Serialize(new Pair { Left = new Node { Name = "a" } }, dangling);
 
         json.Should().Contain("\"$ref\":\"1\"");
-        json.Should().NotContain("#/left");
+        json.Should().NotContain("\"$ref\":\"#\"");
+    }
+
+    internal sealed class RawRefHolder
+    {
+        public bool Unused { get; set; }
+    }
+
+    private sealed class RawRefConverter : System.Text.Json.Serialization.JsonConverter<RawRefHolder>
+    {
+        public override RawRefHolder Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => throw new NotSupportedException();
+
+        public override void Write(Utf8JsonWriter writer, RawRefHolder value, JsonSerializerOptions options)
+            => writer.WriteRawValue("{\"$ref\": \"1\"}");
+    }
+
+    internal sealed class RawRefGraph
+    {
+        public RawRefHolder Raw { get; set; } = new();
+        public Node? Left { get; set; }
+        public Node? Right { get; set; }
+    }
+
+    [Test]
+    public async Task RawConverterRef_InvisibleToScan_PassesThroughVerbatim()
+    {
+        // A foreign renter returns the bucket dirty at slot 1; the transformer must never surface it.
+        var dirty = System.Buffers.ArrayPool<byte[]?>.Shared.Rent(201);
+        dirty[1] = "\"#dirt\""u8.ToArray();
+        System.Buffers.ArrayPool<byte[]?>.Shared.Return(dirty);
+
+        // "$ref": "1" (with a space) is invisible to the pass-1 byte scan, so slot 1 is untracked; ids are
+        // spread 100 apart to keep density under 1/8 so the rent-clear takes the sparse branch and skips it.
+        var options = CustomIdOptions(n => (n * 100).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        options.Converters.Add(new RawRefConverter());
+        var shared = new Node { Name = "s" };
+        var json = await Serialize(new RawRefGraph { Raw = new RawRefHolder(), Left = shared, Right = shared }, options);
+
+        json.Should().Contain("\"$ref\":\"1\"", "a scan-invisible ref must pass through verbatim");
+        json.Should().NotContain("#dirt");
+        json.Should().Contain("\"$ref\":\"#/left\"", "tracked refs still transform");
     }
 
     [Test]
