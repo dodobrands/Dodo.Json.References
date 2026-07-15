@@ -39,6 +39,8 @@ operation; base options are snapshotted at construction and the first lease is b
 - Metadata detection is name-based (`$id`/`$ref`/`$values`); reference ids must not require JSON
   escaping; the encoder must not escape `/` or `~` in property names (default and
   `UnsafeRelaxedJsonEscaping` never do).
+- Input must be `ReferenceHandler.Preserve`-shaped: a `$ref` never precedes its `$id` (STJ always
+  writes them in that order). Forward references pass through verbatim, untransformed.
 - `PooledReferenceHandler`/`PoolingReferenceResolver` are single-operation: reset between
   documents or use a fresh instance; the pooled serializer/deserializer enforce this via leases.
 

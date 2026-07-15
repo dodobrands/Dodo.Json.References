@@ -565,6 +565,32 @@ public static class JsonReferenceTransformer
                 ArrayPool<PathSegment>.Shared.Return(rentedPathStack);
             }
 
+            // Null the written slots (idPaths is only ever touched at set-bit indexes) or the
+            // pooled array keeps rooting this document's path arrays; dense bitmaps flip to a
+            // memset because that many scattered writes cost more than wiping the range.
+            var setBits = 0;
+            for (var w = 0; w < bitmapWords; w++)
+            {
+                setBits += BitOperations.PopCount(referencedBitmap[w]);
+            }
+
+            if (setBits > (int)(maxNumericId >> 3))
+            {
+                Array.Clear(idPaths, 0, (int)maxNumericId + 1);
+            }
+            else
+            {
+                for (var w = 0; w < bitmapWords; w++)
+                {
+                    var word = referencedBitmap[w];
+                    while (word != 0)
+                    {
+                        idPaths[(w << 6) + BitOperations.TrailingZeroCount(word)] = null;
+                        word &= word - 1;
+                    }
+                }
+            }
+
             ArrayPool<ulong>.Shared.Return(referencedBitmap);
             ArrayPool<byte[]?>.Shared.Return(idPaths);
         }
