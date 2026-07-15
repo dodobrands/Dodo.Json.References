@@ -47,4 +47,5 @@ jobs:
         run: dotnet build Dodo.Json.References.slnx -c Release --no-restore
 
       - name: Test
-        run: dotnet test tests/Dodo.Json.References.Tests -c Release --no-build
+        # detailed verbosity lists every test (and TestCase) name in the log, so a silently skipped case is visible.
+        run: dotnet test tests/Dodo.Json.References.Tests -c Release --no-build --logger "console;verbosity=detailed"
