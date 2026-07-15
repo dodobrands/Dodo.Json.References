@@ -125,6 +125,21 @@ internal sealed class JsonReferenceTransformerEdgeTests
     }
 
     [Test]
+    public async Task PooledArrayReuse_DanglingRefDoesNotSeePreviousDocumentPointer()
+    {
+        // Doc 1 writes a pointer into idPaths slot 1 and returns the array to the pool.
+        var numericIds = CustomIdOptions(n => n.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        (await Serialize(SharedPair(out _), numericIds)).Should().Contain("\"$id\":\"#/left\"");
+
+        // Doc 2 rents the same slot range with id 1 dangling: the slot must read null, not doc 1's pointer.
+        var dangling = CustomIdOptions(n => n.ToString(System.Globalization.CultureInfo.InvariantCulture), alwaysExists: true);
+        var json = await Serialize(new Pair { Left = new Node { Name = "a" } }, dangling);
+
+        json.Should().Contain("\"$ref\":\"1\"");
+        json.Should().NotContain("#/left");
+    }
+
+    [Test]
     public async Task EscapedIds_DefaultEncoder_PassThroughUntransformed()
     {
         // Documented limitation: the default encoder escapes non-ASCII ids to \uXXXX, the two passes disagree, and the pair stays untransformed.
