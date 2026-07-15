@@ -10,6 +10,7 @@
         <SymbolPackageFormat>snupkg</SymbolPackageFormat>
         <IsAotCompatible>true</IsAotCompatible>
         <EnablePackageValidation>true</EnablePackageValidation>
+        <PackageValidationBaselineVersion>1.0.0</PackageValidationBaselineVersion>
     </PropertyGroup>
 
     <ItemGroup>

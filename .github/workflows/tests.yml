@@ -47,4 +47,36 @@ jobs:
         run: dotnet build Dodo.Json.References.slnx -c Release --no-restore
 
       - name: Test
-        run: dotnet test tests/Dodo.Json.References.Tests -c Release --no-build
+        # detailed verbosity lists every test (and TestCase) name in the log, so a silently skipped case is visible.
+        run: dotnet test tests/Dodo.Json.References.Tests -c Release --no-build --logger "console;verbosity=detailed"
+
+  pack-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    steps:
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Restore Nuget cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5.0.0
+        with:
+          path: ~/.nuget/packages
+          key: nugetcache-${{ hashFiles('Directory.Packages.props') }}
+          restore-keys: |
+            nugetcache-
+
+      # Package validation (the API diff against PackageValidationBaselineVersion) only
+      # runs during pack; without this job a breaking change would first surface in the
+      # tag publish. The version is a never-published placeholder: CP0003 requires the
+      # packed assembly version to be >= the baseline's.
+      - name: Pack
+        run: dotnet pack src/Dodo.Json.References/Dodo.Json.References.csproj -c Release /p:Version=99.99.99-validate --output nupkgs
