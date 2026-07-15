@@ -565,37 +565,42 @@ public static class JsonReferenceTransformer
                 ArrayPool<PathSegment>.Shared.Return(rentedPathStack);
             }
 
-            // Null the written (set-bit) slots or the pool keeps rooting the path arrays; dense bitmaps memset instead.
-            var setBits = 0;
-            for (var w = 0; w < bitmapWords; w++)
-            {
-                setBits += BitOperations.PopCount(referencedBitmap[w]);
-            }
-
-            // Above ~1/8 density scattered stores touch nearly every cache line anyway; a sequential wipe is cheaper.
-            if (setBits > (int)(maxNumericId >> 3))
-            {
-                Array.Clear(idPaths, 0, (int)maxNumericId + 1);
-            }
-            else
-            {
-                // Set bits are exactly the written slots (idPaths is only ever touched at set-bit indexes).
-                for (var w = 0; w < bitmapWords; w++)
-                {
-                    var word = referencedBitmap[w];
-                    while (word != 0)
-                    {
-                        idPaths[(w << 6) + BitOperations.TrailingZeroCount(word)] = null;
-                        word &= word - 1;
-                    }
-                }
-            }
-
+            ClearWrittenIdPaths(idPaths, referencedBitmap, bitmapWords, maxNumericId);
             ArrayPool<ulong>.Shared.Return(referencedBitmap);
             ArrayPool<byte[]?>.Shared.Return(idPaths);
         }
 
         return ValueTask.CompletedTask;
+    }
+
+    // Null the written (set-bit) slots or the pool keeps rooting the path arrays; dense bitmaps memset instead.
+    private static void ClearWrittenIdPaths(byte[]?[] idPaths, ulong[] referencedBitmap, int bitmapWords, uint maxNumericId)
+    {
+        var setBits = 0;
+        for (var w = 0; w < bitmapWords; w++)
+        {
+            setBits += BitOperations.PopCount(referencedBitmap[w]);
+        }
+
+        // Measured crossover: ~1/16-1/8 density on 128B-line arm64, higher on 64B-line x64; a too-low
+        // threshold costs a full-range memset on large sparse ranges, so 1/8 errs on the cheap side.
+        if (setBits > (int)(maxNumericId >> 3))
+        {
+            Array.Clear(idPaths, 0, (int)maxNumericId + 1);
+        }
+        else
+        {
+            // Set bits are exactly the written slots (idPaths is only ever touched at set-bit indexes).
+            for (var w = 0; w < bitmapWords; w++)
+            {
+                var word = referencedBitmap[w];
+                while (word != 0)
+                {
+                    idPaths[(w << 6) + BitOperations.TrailingZeroCount(word)] = null;
+                    word &= word - 1;
+                }
+            }
+        }
     }
 
     // Names are copied as raw escaped JSON bytes with RFC 6901 specials escaped ('/' ~1, '~' ~0).
