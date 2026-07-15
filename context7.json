@@ -3,7 +3,7 @@
   "url": "https://context7.com/dodobrands/dodo.json.references",
   "public_key": "pk_0g7lNzmKG9SoyKjxddBqA",
   "projectTitle": "Dodo.Json.References",
-  "description": "High-performance System.Text.Json reference serialization for .NET: serialize object graphs with shared objects into JSON where each duplicate becomes an RFC 6901 JSON Pointer $ref to the object's real location, and deserialize such documents back with reference identity preserved. Built for very large documents: ~5.9x faster and ~5.7x less allocation than a JsonNode-walking baseline on a 6.6 MB production document.",
+  "description": "High-performance System.Text.Json reference serialization for .NET: duplicates in an object graph become RFC 6901 JSON Pointer $ref entries; deserialization restores reference identity.",
   "folders": [],
   "excludeFolders": ["tests", ".github", ".worktrees"],
   "rules": [
