@@ -1,4 +1,17 @@
 {
+  "$schema": "https://context7.com/schema/context7.json",
   "url": "https://context7.com/dodobrands/dodo.json.references",
-  "public_key": "pk_0g7lNzmKG9SoyKjxddBqA"
+  "public_key": "pk_0g7lNzmKG9SoyKjxddBqA",
+  "projectTitle": "Dodo.Json.References",
+  "description": "High-performance System.Text.Json reference serialization for .NET: streams ReferenceHandler.Preserve $id/$ref metadata into RFC 6901 JSON Pointers, and deserializes back with reference identity preserved — pooled serializer/deserializer leases for large object graphs.",
+  "folders": [],
+  "excludeFolders": ["tests", ".github", ".worktrees"],
+  "rules": [
+    "Create one PooledReferenceSerializer<T>/PooledReferenceDeserializer<T> per (JsonSerializerOptions, type) pair and reuse it (static field); leases handle per-operation state.",
+    "Input to the transformer must be ReferenceHandler.Preserve-shaped: a $ref never precedes its $id; forward references pass through untransformed.",
+    "Reference ids must not require JSON escaping; the encoder must not escape / or ~ in property names (default and UnsafeRelaxedJsonEscaping are safe).",
+    "PooledReferenceHandler/PoolingReferenceResolver are single-operation: reset between documents or use a fresh instance.",
+    "Prefer the PipeWriter overload on hot paths; use JsonTypeInfo<T> overloads under trimming or Native AOT.",
+    "Requires .NET 10; single runtime dependency Microsoft.Extensions.ObjectPool."
+  ]
 }
