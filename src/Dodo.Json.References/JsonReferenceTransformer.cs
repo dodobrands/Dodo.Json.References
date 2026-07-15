@@ -565,9 +565,7 @@ public static class JsonReferenceTransformer
                 ArrayPool<PathSegment>.Shared.Return(rentedPathStack);
             }
 
-            // Null the written slots (idPaths is only ever touched at set-bit indexes) or the
-            // pooled array keeps rooting this document's path arrays; dense bitmaps flip to a
-            // memset because that many scattered writes cost more than wiping the range.
+            // Null the written (set-bit) slots or the pool keeps rooting the path arrays; dense bitmaps memset instead.
             var setBits = 0;
             for (var w = 0; w < bitmapWords; w++)
             {
