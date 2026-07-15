@@ -236,14 +236,12 @@ public static class JsonReferenceTransformer
 
         referencedIds.Dispose();
 
-        // The bitmap is immutable from here on: one popcount serves both cleanups.
         var trackedIdCount = 0;
         for (var w = 0; w < bitmapWords; w++)
         {
             trackedIdCount += BitOperations.PopCount(referencedBitmap[w]);
         }
 
-        // Scrubbing only the tracked slots is enough: pass 2 never reads an unset-bit slot, so foreign pool dirt there is unreachable.
         var idPaths = ArrayPool<byte[]?>.Shared.Rent((int)maxNumericId + 1);
         ClearTrackedIdPaths(idPaths, referencedBitmap, bitmapWords, maxNumericId, trackedIdCount);
 
