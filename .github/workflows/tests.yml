@@ -76,6 +76,7 @@ jobs:
 
       # Package validation (the API diff against PackageValidationBaselineVersion) only
       # runs during pack; without this job a breaking change would first surface in the
-      # tag publish.
+      # tag publish. The version is a never-published placeholder: CP0003 requires the
+      # packed assembly version to be >= the baseline's.
       - name: Pack
-        run: dotnet pack src/Dodo.Json.References/Dodo.Json.References.csproj -c Release --output nupkgs
+        run: dotnet pack src/Dodo.Json.References/Dodo.Json.References.csproj -c Release /p:Version=99.99.99-validate --output nupkgs
