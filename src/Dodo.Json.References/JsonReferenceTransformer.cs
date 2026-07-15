@@ -572,12 +572,14 @@ public static class JsonReferenceTransformer
                 setBits += BitOperations.PopCount(referencedBitmap[w]);
             }
 
+            // Above ~1/8 density scattered stores touch nearly every cache line anyway; a sequential wipe is cheaper.
             if (setBits > (int)(maxNumericId >> 3))
             {
                 Array.Clear(idPaths, 0, (int)maxNumericId + 1);
             }
             else
             {
+                // Set bits are exactly the written slots (idPaths is only ever touched at set-bit indexes).
                 for (var w = 0; w < bitmapWords; w++)
                 {
                     var word = referencedBitmap[w];
