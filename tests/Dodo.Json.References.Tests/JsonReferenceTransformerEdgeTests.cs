@@ -132,7 +132,7 @@ internal sealed class JsonReferenceTransformerEdgeTests
         cycle.Self = cycle;
         (await Serialize(cycle, PreserveOptions)).Should().Contain("\"$id\":\"#\"");
 
-        // Doc 2 rents the same slot range with id 1 dangling: the slot must read null, not doc 1's pointer.
+        // Doc 2 reads id 1 dangling; return-side and rent-side cleanup each null the slot, so this trips only if both regress.
         var dangling = CustomIdOptions(n => n.ToString(System.Globalization.CultureInfo.InvariantCulture), alwaysExists: true);
         var json = await Serialize(new Pair { Left = new Node { Name = "a" } }, dangling);
 
