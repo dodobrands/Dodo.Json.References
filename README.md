@@ -11,7 +11,7 @@ transformer plus pooled (options + reference resolver) leases for large document
 { "$id": "1", "items": [ { "$id": "2", "name": "x" }, { "$ref": "2" } ] }
 ```
 
-`JsonReferenceTransformer` rewrites them to RFC 6901 JSON Pointers into the logical object graph
+`JsonReferenceTransformer` rewrites them to **RFC 6901 JSON Pointers** into the logical object graph
 (`$values` wrappers are transparent) and drops unreferenced object `$id`s — collection-wrapper
 `$id`s stay, STJ requires them before `$values` — in a two-pass no-DOM transform over a pooled
 full-document buffer:
