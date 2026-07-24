@@ -99,8 +99,8 @@ miss builds a fresh lease (full type-info graph resolution — the pre-pooling p
 ```csharp
 maxRetained: country switch
 {
-    CountryCode.RU => 16,                   // dominant traffic
-    CountryCode.BY or CountryCode.KZ => 4,
+    CountryCode.ABC => 16,                   // dominant traffic
+    CountryCode.DEF or CountryCode.XYZ => 4,
     _ => 2                                  // misses just rebuild per call
 }
 ```
