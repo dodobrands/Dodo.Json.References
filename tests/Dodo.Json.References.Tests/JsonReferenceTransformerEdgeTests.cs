@@ -1,5 +1,6 @@
 using System.IO.Pipelines;
 using System.Text.Encodings.Web;
+using System.Text.Unicode;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FluentAssertions;
@@ -56,6 +57,23 @@ internal sealed class JsonReferenceTransformerEdgeTests
         public Node[] Custom { get; set; } = [];
 
         public Node? Echo { get; set; }
+    }
+
+    internal sealed class PointerSpecialNameGraph
+    {
+        [JsonPropertyName("a/b")]
+        public Node? Slash { get; set; }
+
+        [JsonPropertyName("c~d")]
+        public Node? Tilde { get; set; }
+    }
+
+    internal sealed class TildeNameGraph
+    {
+        [JsonPropertyName("c~d")]
+        public Node? Tilde { get; set; }
+
+        public Node? Plain { get; set; }
     }
 
     internal sealed class ManyRefsGraph
@@ -182,15 +200,50 @@ internal sealed class JsonReferenceTransformerEdgeTests
     }
 
     [Test]
-    public async Task EscapedIds_DefaultEncoder_PassThroughUntransformed()
+    public async Task EscapedIds_DefaultEncoder_AreRewrittenToPointers()
     {
-        // Documented limitation: the default encoder escapes non-ASCII ids to \uXXXX, the two passes disagree, and the pair stays untransformed.
         var options = CustomIdOptions(n => $"тест-{n}");
         var json = await Serialize(SharedPair(out _), options);
 
-        // The resolver hands out ids root-first: the shared node is the second registration.
-        json.Should().NotContain("\"$id\"");
-        json.Should().Contain("\"$ref\":\"\\u0442\\u0435\\u0441\\u0442-2\"");
+        json.Should().Contain("\"$id\":\"#/left\"");
+        json.Should().Contain("\"$ref\":\"#/left\"");
+
+        var restored = JsonSerializer.Deserialize<Pair>(json, options)!;
+        restored.Left.Should().BeSameAs(restored.Right);
+    }
+
+    [Test]
+    public async Task PointerSpecialsInPropertyNames_AreEscapedPerRfc6901()
+    {
+        var settings = new TextEncoderSettings(UnicodeRanges.BasicLatin);
+        settings.ForbidCharacter('/');
+        settings.ForbidCharacter('~');
+        var options = new JsonSerializerOptions(PreserveOptions) { Encoder = JavaScriptEncoder.Create(settings) };
+        var shared = new Node { Name = "s" };
+        var json = await Serialize(new PointerSpecialNameGraph { Slash = shared, Tilde = shared }, options);
+
+        json.Should().Contain("\"$id\":\"#/a~1b\"");
+        json.Should().Contain("\"$ref\":\"#/a~1b\"");
+
+        var restored = JsonSerializer.Deserialize<PointerSpecialNameGraph>(json, options)!;
+        restored.Slash.Should().BeSameAs(restored.Tilde);
+    }
+
+    [Test]
+    public async Task TildeInPropertyName_EscapesAsTildeZero()
+    {
+        var settings = new TextEncoderSettings(UnicodeRanges.BasicLatin);
+        settings.ForbidCharacter('/');
+        settings.ForbidCharacter('~');
+        var options = new JsonSerializerOptions(PreserveOptions) { Encoder = JavaScriptEncoder.Create(settings) };
+        var shared = new Node { Name = "s" };
+        var json = await Serialize(new TildeNameGraph { Tilde = shared, Plain = shared }, options);
+
+        json.Should().Contain("\"$id\":\"#/c~0d\"");
+        json.Should().Contain("\"$ref\":\"#/c~0d\"");
+
+        var restored = JsonSerializer.Deserialize<TildeNameGraph>(json, options)!;
+        restored.Tilde.Should().BeSameAs(restored.Plain);
     }
 
     [Test]
