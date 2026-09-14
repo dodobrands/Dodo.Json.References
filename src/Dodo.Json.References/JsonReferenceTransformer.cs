@@ -5,12 +5,13 @@ using System.IO.Pipelines;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 
 namespace Dodo.Json.References;
 
-/// <remarks>Ids must not require JSON escaping and the encoder must not escape '/' or '~' in property names (default and UnsafeRelaxed never do).</remarks>
+/// <remarks>Pointers are emitted in the RFC 6901 section 6 URI-fragment form: section 3 escaping (~0/~1) then RFC 3986 percent-encoding.</remarks>
 public static class JsonReferenceTransformer
 {
     // Covers the reader's default MaxDepth of 64; deeper documents spill into pooled growth.
@@ -24,6 +25,14 @@ public static class JsonReferenceTransformer
 
     // Exclusive: renting bound + 1 slots would round up to the next ArrayPool bucket (32MB, not 16MB).
     private const uint MaxDenseNumericId = 1 << 21;
+
+    private const int MaxDenseIdEscapedLength = 7 * 6;
+
+    private static readonly SearchValues<byte> PointerLiteralBytes = SearchValues.Create(
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._!$&'()*+,;=:@?"u8
+    );
+
+    private static readonly byte[] UpperHexDigits = [.. "0123456789ABCDEF"u8];
 
     private const int StreamSegmentSize = 64 * 1024;
 
@@ -333,6 +342,7 @@ public static class JsonReferenceTransformer
                         {
                             // $values is transparent in pointer paths: index-only segment, no name, no enclosing-index bump.
                             isPendingValuesProperty = false;
+                            pendingPropertyOffset = -1;
                             pathStack[pathStackDepth++] = new PathSegment
                             {
                                 PropertyNameOffset = -1,
@@ -387,11 +397,13 @@ public static class JsonReferenceTransformer
                     case JsonTokenType.PropertyName:
                         var propSpan = reader.ValueSpan;
                         var isMetadataCandidate = !propSpan.IsEmpty && propSpan[0] == (byte)'$';
+                        pendingPropertyOffset = (int)reader.TokenStartIndex + 1; // skip opening quote
+                        pendingPropertyLength = propSpan.Length;
                         if (isMetadataCandidate && propSpan.SequenceEqual(Utf8Id))
                         {
                             reader.Read();
 
-                            if (TryReadNumericId(ref reader, out var numericId))
+                            if (TryReadNumericId(ref reader, idDecodeSpan, out var numericId))
                             {
                                 if (numericId <= maxNumericId
                                     && (referencedBitmap[numericId >> 6] & (1UL << (int)numericId)) != 0)
@@ -496,21 +508,14 @@ public static class JsonReferenceTransformer
                             writer.WritePropertyName(EncodedValues);
                             isPendingValuesProperty = true;
                         }
+                        else if (!reader.ValueIsEscaped)
+                        {
+                            writer.WritePropertyName(propSpan);
+                        }
                         else
                         {
-                            pendingPropertyOffset = (int)reader.TokenStartIndex + 1; // skip opening quote
-
-                            if (!reader.ValueIsEscaped)
-                            {
-                                writer.WritePropertyName(propSpan);
-                                pendingPropertyLength = propSpan.Length;
-                            }
-                            else
-                            {
-                                // propSpan is still escaped here; raw re-emission would double-escape.
-                                writer.WritePropertyName(reader.GetString()!);
-                                pendingPropertyLength = propSpan.Length;
-                            }
+                            // propSpan is still escaped here; raw re-emission would double-escape.
+                            writer.WritePropertyName(reader.GetString()!);
                         }
 
                         break;
@@ -521,7 +526,7 @@ public static class JsonReferenceTransformer
                             pendingPropertyOffset = -1;
                             // The bit test keeps refs the pass-1 scan never saw (a converter's WriteRawValue can
                             // emit "$ref" with arbitrary spacing) away from slots the sparse rent-clear skipped.
-                            if (TryReadNumericId(ref reader, out var numericRefId)
+                            if (TryReadNumericId(ref reader, idDecodeSpan, out var numericRefId)
                                 && numericRefId <= maxNumericId
                                 && (referencedBitmap[numericRefId >> 6] & (1UL << (int)numericRefId)) != 0
                                 && idPaths[numericRefId] != 0)
@@ -653,7 +658,10 @@ public static class JsonReferenceTransformer
     {
         if (arena.Length - used < value.Length)
         {
-            var grown = ArrayPool<byte>.Shared.Rent(Math.Max(arena.Length * 2, used + value.Length));
+            var required = (long)used + value.Length;
+            var grown = ArrayPool<byte>.Shared.Rent(
+                (int)Math.Clamp(Math.Max((long)arena.Length * 2, required), required, Array.MaxLength)
+            );
             arena.AsSpan(0, used).CopyTo(grown);
             ArrayPool<byte>.Shared.Return(arena);
             arena = grown;
@@ -687,14 +695,14 @@ public static class JsonReferenceTransformer
             ref readonly var seg = ref segments[i];
 
             // Worst case per segment: separators + fully escaped name + ten index digits + quote.
-            path.EnsureFree(2 * seg.PropertyNameLength + 13);
+            path.EnsureFree(3 * seg.PropertyNameLength + 13);
             var dst = path.FreeSpan;
             var pos = 0;
             if (seg.PropertyNameOffset >= 0)
             {
                 var propNameSpan = jsonSpan.Slice(seg.PropertyNameOffset, seg.PropertyNameLength);
                 dst[pos++] = (byte)'/';
-                if (!propNameSpan.ContainsAny((byte)'/', (byte)'~', (byte)'\\'))
+                if (!propNameSpan.ContainsAnyExcept(PointerLiteralBytes))
                 {
                     propNameSpan.CopyTo(dst[pos..]);
                     pos += propNameSpan.Length;
@@ -717,84 +725,134 @@ public static class JsonReferenceTransformer
 
         path.Append((byte)'"');
 
-        var packed = AppendToPathArena(path.WrittenSpan, ref arena, ref used);
-        path.Dispose();
-        return packed;
+        try
+        {
+            return AppendToPathArena(path.WrittenSpan, ref arena, ref used);
+        }
+        finally
+        {
+            path.Dispose();
+        }
     }
 
     private static int WritePointerEscaped(ReadOnlySpan<byte> propertyName, Span<byte> buffer, int pos)
     {
+        Span<byte> decoded = stackalloc byte[4];
         var i = 0;
         while (i < propertyName.Length)
         {
-            var b = propertyName[i];
-            if (b == (byte)'/')
+            scoped ReadOnlySpan<byte> logical;
+            if (propertyName[i] == (byte)'\\')
             {
-                buffer[pos++] = (byte)'~';
-                buffer[pos++] = (byte)'1';
-                i++;
-            }
-            else if (b == (byte)'~')
-            {
-                buffer[pos++] = (byte)'~';
-                buffer[pos++] = (byte)'0';
-                i++;
-            }
-            else if (b == (byte)'\\')
-            {
-                i += WriteEscapeSequence(propertyName[i..], buffer, ref pos);
+                i += DecodeJsonEscape(propertyName[i..], decoded, out var written);
+                logical = decoded[..written];
             }
             else
             {
-                buffer[pos++] = b;
+                logical = propertyName.Slice(i, 1);
                 i++;
+            }
+
+            foreach (var b in logical)
+            {
+                pos = WritePointerByte(b, buffer, pos);
             }
         }
 
         return pos;
     }
 
-    // RFC 6901 section 3: only / and ~ are special, so every other escape copies through verbatim.
-    private static int WriteEscapeSequence(ReadOnlySpan<byte> tail, Span<byte> buffer, ref int pos)
+    private static int WritePointerByte(byte b, Span<byte> buffer, int pos)
     {
+        switch (b)
+        {
+            case (byte)'/':
+                buffer[pos++] = (byte)'~';
+                buffer[pos++] = (byte)'1';
+                return pos;
+
+            case (byte)'~':
+                buffer[pos++] = (byte)'~';
+                buffer[pos++] = (byte)'0';
+                return pos;
+        }
+
+        if (PointerLiteralBytes.Contains(b))
+        {
+            buffer[pos++] = b;
+            return pos;
+        }
+
+        buffer[pos++] = (byte)'%';
+        buffer[pos++] = UpperHexDigits[b >> 4];
+        buffer[pos++] = UpperHexDigits[b & 0xF];
+        return pos;
+    }
+
+    private static int DecodeJsonEscape(ReadOnlySpan<byte> tail, scoped Span<byte> decoded, out int written)
+    {
+        written = 1;
         if (tail.Length < 2)
         {
-            buffer[pos++] = tail[0];
+            decoded[0] = tail[0];
             return 1;
         }
 
-        if (tail[1] == (byte)'/')
+        switch (tail[1])
         {
-            buffer[pos++] = (byte)'~';
-            buffer[pos++] = (byte)'1';
-            return 2;
+            case (byte)'b':
+                decoded[0] = 0x08;
+                return 2;
+
+            case (byte)'f':
+                decoded[0] = 0x0C;
+                return 2;
+
+            case (byte)'n':
+                decoded[0] = 0x0A;
+                return 2;
+
+            case (byte)'r':
+                decoded[0] = 0x0D;
+                return 2;
+
+            case (byte)'t':
+                decoded[0] = 0x09;
+                return 2;
+
+            case (byte)'u' when tail.Length >= 6:
+                break;
+
+            default:
+                decoded[0] = tail[1];
+                return 2;
         }
 
-        if (tail[1] != (byte)'u' || tail.Length < 6)
+        var scalar = ParseHex4(tail[2..6]);
+        var consumed = 6;
+        if (char.IsHighSurrogate((char)scalar) && tail.Length >= 12 && tail[6] == (byte)'\\' && tail[7] == (byte)'u')
         {
-            buffer[pos++] = tail[0];
-            buffer[pos++] = tail[1];
-            return 2;
+            var low = (char)ParseHex4(tail[8..12]);
+            if (char.IsLowSurrogate(low))
+            {
+                scalar = char.ConvertToUtf32((char)scalar, low);
+                consumed = 12;
+            }
         }
 
-        var code = tail[2..6];
-        if (code.SequenceEqual("002F"u8) || code.SequenceEqual("002f"u8))
+        written = (Rune.TryCreate(scalar, out var rune) ? rune : Rune.ReplacementChar).EncodeToUtf8(decoded);
+        return consumed;
+    }
+
+    private static int ParseHex4(ReadOnlySpan<byte> hex)
+    {
+        var value = 0;
+        foreach (var c in hex)
         {
-            buffer[pos++] = (byte)'~';
-            buffer[pos++] = (byte)'1';
-            return 6;
+            value = (value << 4) + (c <= (byte)'9' ? c - (byte)'0' : (c | 0x20) - (byte)'a' + 10);
         }
 
-        if (code.SequenceEqual("007E"u8) || code.SequenceEqual("007e"u8))
-        {
-            buffer[pos++] = (byte)'~';
-            buffer[pos++] = (byte)'0';
-            return 6;
-        }
-
-        tail[..6].CopyTo(buffer[pos..]);
-        pos += 6;
-        return 6;
+        return value;
     }
 
     private static void CollectReferencedIds(
@@ -805,6 +863,7 @@ public static class JsonReferenceTransformer
     {
         maxNumericId = 0;
         var offset = 0;
+        Span<char> decodeScratch = stackalloc char[MaxDenseIdEscapedLength];
 
         while (true)
         {
@@ -833,19 +892,39 @@ public static class JsonReferenceTransformer
                 continue;
             }
 
-            overflow ??= [];
             if (idBytes.IndexOf((byte)'\\') < 0)
             {
-                overflow.Add(System.Text.Encoding.UTF8.GetString(idBytes));
+                (overflow ??= []).Add(System.Text.Encoding.UTF8.GetString(idBytes));
                 continue;
             }
 
             var escapedReader = new Utf8JsonReader(jsonSpan[quoteAt..], isFinalBlock: false, state: default);
-            if (escapedReader.Read() && escapedReader.TokenType == JsonTokenType.String)
+            if (!escapedReader.Read() || escapedReader.TokenType != JsonTokenType.String)
             {
-                overflow.Add(escapedReader.GetString()!);
-                offset = quoteAt + (int)escapedReader.BytesConsumed;
+                continue;
             }
+
+            offset = quoteAt + (int)escapedReader.BytesConsumed;
+            if (escapedReader.ValueSpan.Length > MaxDenseIdEscapedLength)
+            {
+                (overflow ??= []).Add(escapedReader.GetString()!);
+                continue;
+            }
+
+            var decodedLength = escapedReader.CopyString(decodeScratch);
+            var decodedId = decodeScratch[..decodedLength];
+            if (TryParseNumericId(decodedId, out var escapedNumericId))
+            {
+                ids.Append(escapedNumericId);
+                if (escapedNumericId > maxNumericId)
+                {
+                    maxNumericId = escapedNumericId;
+                }
+
+                continue;
+            }
+
+            (overflow ??= []).Add(new string(decodedId));
         }
 
         var learned = Math.Min(MaxReferencedIdsHint, (long)BitOperations.RoundUpToPowerOf2((uint)ids.Count));
@@ -883,15 +962,55 @@ public static class JsonReferenceTransformer
         return true;
     }
 
-    private static bool TryReadNumericId(ref Utf8JsonReader reader, out uint id)
+    private static bool TryParseNumericId(ReadOnlySpan<char> value, out uint id)
     {
-        if (reader.TokenType == JsonTokenType.String && !reader.ValueIsEscaped)
+        id = 0;
+        if (value.Length is < 1 or > 7 || (value[0] == '0' && value.Length != 1))
+        {
+            return false;
+        }
+
+        uint parsed = 0;
+        foreach (var c in value)
+        {
+            var digit = (uint)(c - '0');
+            if (digit > 9)
+            {
+                return false;
+            }
+
+            parsed = parsed * 10 + digit;
+        }
+
+        if (parsed >= MaxDenseNumericId)
+        {
+            return false;
+        }
+
+        id = parsed;
+        return true;
+    }
+
+    private static bool TryReadNumericId(ref Utf8JsonReader reader, scoped Span<char> decodeScratch, out uint id)
+    {
+        id = 0;
+        if (reader.TokenType != JsonTokenType.String)
+        {
+            return false;
+        }
+
+        if (!reader.ValueIsEscaped)
         {
             return TryParseNumericId(reader.ValueSpan, out id);
         }
 
-        id = 0;
-        return false;
+        if (reader.ValueSpan.Length > MaxDenseIdEscapedLength)
+        {
+            return false;
+        }
+
+        var length = reader.CopyString(decodeScratch);
+        return TryParseNumericId(decodeScratch[..length], out id);
     }
 
     // Primitive and null array elements advance the enclosing index too, or later pointer paths drift.

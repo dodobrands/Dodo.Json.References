@@ -183,9 +183,9 @@ internal sealed class JsonReferenceTransformerEdgeTests
     public async Task RawConverterRef_InvisibleToScan_PassesThroughVerbatim()
     {
         // A foreign renter returns the bucket dirty at slot 1; the transformer must never surface it.
-        var dirty = System.Buffers.ArrayPool<byte[]?>.Shared.Rent(201);
-        dirty[1] = "\"#dirt\""u8.ToArray();
-        System.Buffers.ArrayPool<byte[]?>.Shared.Return(dirty);
+        var dirty = System.Buffers.ArrayPool<long>.Shared.Rent(301);
+        dirty[1] = 3L;
+        System.Buffers.ArrayPool<long>.Shared.Return(dirty);
 
         // "$ref": "1" (with a space) is invisible to the pass-1 byte scan, so slot 1 is untracked; ids are
         // spread 100 apart to keep density under 1/8 so the rent-clear takes the sparse branch and skips it.
@@ -195,7 +195,6 @@ internal sealed class JsonReferenceTransformerEdgeTests
         var json = await Serialize(new RawRefGraph { Raw = new RawRefHolder(), Left = shared, Right = shared }, options);
 
         json.Should().Contain("\"$ref\":\"1\"", "a scan-invisible ref must pass through verbatim");
-        json.Should().NotContain("#dirt");
         json.Should().Contain("\"$ref\":\"#/left\"", "tracked refs still transform");
     }
 
@@ -376,6 +375,137 @@ internal sealed class JsonReferenceTransformerEdgeTests
 
         var restored = JsonSerializer.Deserialize<ListGraph>(json, options)!;
         restored.Solo.Should().ContainSingle().Which.Name.Should().Be("x");
+    }
+
+    [Test]
+    public async Task PercentInPropertyName_IsPercentEncodedPerSection6()
+    {
+        var shared = new Node { Name = "s" };
+        var json = await Serialize(new PercentNameGraph { Percent = shared, Plain = shared }, PreserveOptions);
+
+        json.Should().Contain("\"$id\":\"#/c%25d\"");
+        json.Should().Contain("\"$ref\":\"#/c%25d\"");
+
+        var restored = JsonSerializer.Deserialize<PercentNameGraph>(json, PreserveOptions)!;
+        restored.Percent.Should().BeSameAs(restored.Plain);
+    }
+
+    [Test]
+    public async Task SpaceInPropertyName_IsPercentEncoded()
+    {
+        var shared = new Node { Name = "s" };
+        var json = await Serialize(new SpaceNameGraph { Spaced = shared, Plain = shared }, PreserveOptions);
+
+        json.Should().Contain("\"$id\":\"#/a%20b\"");
+        json.Should().Contain("\"$ref\":\"#/a%20b\"");
+    }
+
+    [Test]
+    public async Task NonAsciiPropertyName_IsPercentEncodedAsUtf8Octets()
+    {
+        var options = new JsonSerializerOptions(PreserveOptions) { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+        var shared = new Node { Name = "s" };
+        var json = await Serialize(new NonAsciiNameGraph { Cyrillic = shared, Plain = shared }, options);
+
+        json.Should().Contain("\"$id\":\"#/%D1%82%D0%B5%D1%81%D1%82\"");
+        json.Should().Contain("\"$ref\":\"#/%D1%82%D0%B5%D1%81%D1%82\"");
+    }
+
+    [Test]
+    public async Task EscapedRefToUnescapedNumericId_KeepsItsTarget()
+    {
+        var options = CustomIdOptions(n => n.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        options.Converters.Add(new EscapedRefConverter());
+        var json = await Serialize(new EscapedRefGraph { Left = new Node { Name = "s" }, Raw = new RawRefHolder() }, options);
+
+        json.Should().Contain("\"$id\":\"#\"", "the root owns the numeric id the escaped $ref names");
+        json.Should().Contain("\"raw\":{\"$ref\":\"#\"}", "an escaped $ref still resolves to its target");
+    }
+
+    [Test]
+    public async Task UnescapedRefToEscapedNumericId_KeepsItsTarget()
+    {
+        var json = await Serialize(new EscapedIdPairHolder(), PreserveOptions);
+
+        json.Should().Contain("\"$id\":\"#/pair/a\"", "an unescaped $ref still references this escaped id");
+        json.Should().Contain("\"$ref\":\"#/pair/a\"");
+    }
+
+    [Test]
+    public async Task NonStringRefValue_DoesNotShiftArrayIndexes()
+    {
+        var json = await Serialize(new NonStringRefHolder(), PreserveOptions);
+
+        json.Should().Contain("\"$id\":\"#/items/1\"", "a non-string $ref value is an object member, not an array element");
+        json.Should().Contain("\"$ref\":\"#/items/1\"");
+    }
+
+    internal sealed class PercentNameGraph
+    {
+        [JsonPropertyName("c%d")]
+        public Node? Percent { get; set; }
+
+        public Node? Plain { get; set; }
+    }
+
+    internal sealed class SpaceNameGraph
+    {
+        [JsonPropertyName("a b")]
+        public Node? Spaced { get; set; }
+
+        public Node? Plain { get; set; }
+    }
+
+    internal sealed class NonAsciiNameGraph
+    {
+        [JsonPropertyName("тест")]
+        public Node? Cyrillic { get; set; }
+
+        public Node? Plain { get; set; }
+    }
+
+    private sealed class EscapedRefConverter: System.Text.Json.Serialization.JsonConverter<RawRefHolder>
+    {
+        public override RawRefHolder Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => throw new NotSupportedException();
+
+        public override void Write(Utf8JsonWriter writer, RawRefHolder value, JsonSerializerOptions options)
+            => writer.WriteRawValue("{\"$ref\":\"\\u0031\"}");
+    }
+
+    internal sealed class EscapedRefGraph
+    {
+        public Node? Left { get; set; }
+        public RawRefHolder Raw { get; set; } = new();
+    }
+
+    [JsonConverter(typeof(NonStringRefConverter))]
+    internal sealed class NonStringRefHolder;
+
+    private sealed class NonStringRefConverter: System.Text.Json.Serialization.JsonConverter<NonStringRefHolder>
+    {
+        public override NonStringRefHolder Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => throw new NotSupportedException();
+
+        public override void Write(Utf8JsonWriter writer, NonStringRefHolder value, JsonSerializerOptions options)
+            => writer.WriteRawValue("""{"items":[{"$ref":true},{"$id":"1","name":"t"}],"back":{"$ref":"1"}}""");
+    }
+
+    internal sealed class EscapedIdPairHolder
+    {
+        public EscapedIdPair Pair { get; set; } = new();
+    }
+
+    [JsonConverter(typeof(EscapedIdPairConverter))]
+    internal sealed class EscapedIdPair;
+
+    private sealed class EscapedIdPairConverter: System.Text.Json.Serialization.JsonConverter<EscapedIdPair>
+    {
+        public override EscapedIdPair Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => throw new NotSupportedException();
+
+        public override void Write(Utf8JsonWriter writer, EscapedIdPair value, JsonSerializerOptions options)
+            => writer.WriteRawValue("{\"a\":{\"$id\":\"\\u0032\"},\"b\":{\"$ref\":\"2\"}}");
     }
 
     private sealed class CustomIdReferenceHandler(Func<int, string> idFactory, bool alwaysExists): ReferenceHandler

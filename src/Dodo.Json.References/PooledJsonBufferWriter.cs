@@ -8,7 +8,7 @@ internal sealed class PooledJsonBufferWriter: IBufferWriter<byte>, IDisposable
 {
     private const int InitialCapacity = 64 * 1024;
 
-    private const int MaxCapacityHint = 1024 * 1024;
+    private const int MaxCapacityHint = 64 * 1024 * 1024;
 
     private static int _initialCapacityHint = InitialCapacity;
 
