@@ -398,8 +398,6 @@ public static class JsonReferenceTransformer
                     case JsonTokenType.PropertyName:
                         var propSpan = reader.ValueSpan;
                         var isMetadataCandidate = !propSpan.IsEmpty && propSpan[0] == (byte)'$';
-                        pendingPropertyOffset = (int)reader.TokenStartIndex + 1; // skip opening quote
-                        pendingPropertyLength = propSpan.Length;
                         if (isMetadataCandidate && propSpan.SequenceEqual(Utf8Id))
                         {
                             reader.Read();
@@ -474,6 +472,9 @@ public static class JsonReferenceTransformer
 
                             break;
                         }
+
+                        pendingPropertyOffset = (int)reader.TokenStartIndex + 1; // skip opening quote
+                        pendingPropertyLength = propSpan.Length;
 
                         if (pendingDroppedIdLen != -1)
                         {
