@@ -74,3 +74,5 @@ Thumbs.db
 
 # Nested worktrees (created by `git worktree add .worktrees/<branch>`)
 .worktrees/
+
+BenchmarkDotNet.Artifacts/

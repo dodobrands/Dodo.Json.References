@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsPackable>false</IsPackable>
+        <AnalysisMode>Default</AnalysisMode>
+        <NoWarn>$(NoWarn);CS1591;CA1515;CA1822;CA1002;CA2227;CA1819</NoWarn>
+        <ServerGarbageCollection>false</ServerGarbageCollection>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="BenchmarkDotNet" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\src\Dodo.Json.References\Dodo.Json.References.csproj" />
+    </ItemGroup>
+</Project>
