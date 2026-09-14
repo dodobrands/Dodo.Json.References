@@ -170,7 +170,7 @@ public static class JsonReferenceTransformer
         };
 
     // PipeWriter wrapping keeps the writer in IBufferWriter mode: pooled segments instead of buffering the whole document.
-    private static async ValueTask TransformToStream(
+    internal static async ValueTask TransformToStream(
         ReadOnlyMemory<byte> jsonBytes,
         Stream output,
         JsonSerializerOptions options,
@@ -187,7 +187,7 @@ public static class JsonReferenceTransformer
         }
     }
 
-    private static async ValueTask TransformToPipe(
+    internal static async ValueTask TransformToPipe(
         ReadOnlyMemory<byte> jsonBytes,
         PipeWriter output,
         JsonSerializerOptions options,

@@ -14,13 +14,13 @@ public class SerializeBenchmarks
     [Params(20, 2_000, 20_000)]
     public int Orders { get; set; }
 
-    [Params(true, false)]
-    public bool Shared { get; set; }
+    [ParamsAllValues]
+    public GraphShape Shape { get; set; }
 
     [GlobalSetup]
     public void Setup()
     {
-        _catalog = CatalogFactory.Create(Orders, Shared);
+        _catalog = CatalogFactory.Create(Orders, Shape);
         _pipe = PipeWriter.Create(Stream.Null, new StreamPipeWriterOptions(minimumBufferSize: 64 * 1024, leaveOpen: true));
     }
 
