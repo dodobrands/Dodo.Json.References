@@ -276,7 +276,8 @@ public static class JsonReferenceTransformer
 
             idPaths = ArrayPool<long>.Shared.Rent((int)maxNumericId + 1);
             ClearTrackedIdPaths(idPaths, referencedBitmap, bitmapWords, maxNumericId, trackedIdCount);
-            pathArena = ArrayPool<byte>.Shared.Rent((int)Math.Clamp((long)trackedIdCount * 48, 1024, 1 << 22));
+            var arenaEstimate = (long)(trackedIdCount + (referencedOverflow?.Count ?? 0)) * 48;
+            pathArena = ArrayPool<byte>.Shared.Rent((int)Math.Clamp(arenaEstimate, 1024, 1 << 22));
 
             // Pass 2: transform and write, dropping unreferenced $id properties.
             var reader = new Utf8JsonReader(jsonBytes.Span, new JsonReaderOptions { MaxDepth = maxDepth });
@@ -686,47 +687,47 @@ public static class JsonReferenceTransformer
             return AppendToPathArena(RootPathBytes, ref arena, ref used);
 
         var path = new PooledSpanBuilder<byte>(scratch);
-        path.Append((byte)'"');
-        path.Append((byte)'#');
-
-        var segments = pathStack[..depth];
-        for (var i = 0; i < segments.Length; i++)
-        {
-            ref readonly var seg = ref segments[i];
-
-            // Worst case per segment: separators + fully escaped name + ten index digits + quote.
-            path.EnsureFree(3 * seg.PropertyNameLength + 13);
-            var dst = path.FreeSpan;
-            var pos = 0;
-            if (seg.PropertyNameOffset >= 0)
-            {
-                var propNameSpan = jsonSpan.Slice(seg.PropertyNameOffset, seg.PropertyNameLength);
-                dst[pos++] = (byte)'/';
-                if (!propNameSpan.ContainsAnyExcept(PointerLiteralBytes))
-                {
-                    propNameSpan.CopyTo(dst[pos..]);
-                    pos += propNameSpan.Length;
-                }
-                else
-                {
-                    pos = WritePointerEscaped(propNameSpan, dst, pos);
-                }
-            }
-
-            if (seg is { IsArray: true, ArrayIndex: >= 0 })
-            {
-                dst[pos++] = (byte)'/';
-                seg.ArrayIndex.TryFormat(dst[pos..], out var written, provider: CultureInfo.InvariantCulture);
-                pos += written;
-            }
-
-            path.Advance(pos);
-        }
-
-        path.Append((byte)'"');
-
         try
         {
+            path.Append((byte)'"');
+            path.Append((byte)'#');
+
+            var segments = pathStack[..depth];
+            for (var i = 0; i < segments.Length; i++)
+            {
+                ref readonly var seg = ref segments[i];
+
+                // Worst case per segment: separators + fully escaped name + ten index digits + quote.
+                path.EnsureFree(3 * seg.PropertyNameLength + 13);
+                var dst = path.FreeSpan;
+                var pos = 0;
+                if (seg.PropertyNameOffset >= 0)
+                {
+                    var propNameSpan = jsonSpan.Slice(seg.PropertyNameOffset, seg.PropertyNameLength);
+                    dst[pos++] = (byte)'/';
+                    if (!propNameSpan.ContainsAnyExcept(PointerLiteralBytes))
+                    {
+                        propNameSpan.CopyTo(dst[pos..]);
+                        pos += propNameSpan.Length;
+                    }
+                    else
+                    {
+                        pos = WritePointerEscaped(propNameSpan, dst, pos);
+                    }
+                }
+
+                if (seg is { IsArray: true, ArrayIndex: >= 0 })
+                {
+                    dst[pos++] = (byte)'/';
+                    seg.ArrayIndex.TryFormat(dst[pos..], out var written, provider: CultureInfo.InvariantCulture);
+                    pos += written;
+                }
+
+                path.Advance(pos);
+            }
+
+            path.Append((byte)'"');
+
             return AppendToPathArena(path.WrittenSpan, ref arena, ref used);
         }
         finally
