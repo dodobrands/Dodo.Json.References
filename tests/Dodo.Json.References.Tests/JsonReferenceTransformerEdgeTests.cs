@@ -440,6 +440,34 @@ internal sealed class JsonReferenceTransformerEdgeTests
         json.Should().Contain("\"$ref\":\"#/items/1\"");
     }
 
+    [Test]
+    public async Task IdOnlyArrayElement_DoesNotNameTheNextElement()
+    {
+        var shared = new Node { Name = "shared" };
+        var json = await Serialize(new List<object> { new Dictionary<string, int>(), shared, shared }, PreserveOptions);
+
+        json.Should().Contain("\"$id\":\"#/1\"", "an $id-only element occupies an array index, it never names one");
+        json.Should().Contain("\"$ref\":\"#/1\"");
+    }
+
+    [Test]
+    public async Task ScalarAfterIdOnlyArrayElement_StillCountsTowardArrayIndexes()
+    {
+        var json = await Serialize(new IdOnlyThenScalarHolder(), PreserveOptions);
+
+        json.Should().Contain("\"$id\":\"#/2\"", "the string element between the two $id elements occupies an index");
+        json.Should().Contain("\"$ref\":\"#/2\"");
+    }
+
+    [Test]
+    public async Task IdOnlyElementInsideNestedArray_DoesNotEscapeIntoTheOuterArray()
+    {
+        var json = await Serialize(new IdOnlyInNestedArrayHolder(), PreserveOptions);
+
+        json.Should().Contain("\"$id\":\"#/1\"", "a closing array must not carry a pending property name outwards");
+        json.Should().Contain("\"$ref\":\"#/1\"");
+    }
+
     internal sealed class PercentNameGraph
     {
         [JsonPropertyName("c%d")]
@@ -481,6 +509,30 @@ internal sealed class JsonReferenceTransformerEdgeTests
 
     [JsonConverter(typeof(NonStringRefConverter))]
     internal sealed class NonStringRefHolder;
+
+    [JsonConverter(typeof(IdOnlyThenScalarConverter))]
+    internal sealed class IdOnlyThenScalarHolder;
+
+    private sealed class IdOnlyThenScalarConverter: System.Text.Json.Serialization.JsonConverter<IdOnlyThenScalarHolder>
+    {
+        public override IdOnlyThenScalarHolder Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => throw new NotSupportedException();
+
+        public override void Write(Utf8JsonWriter writer, IdOnlyThenScalarHolder value, JsonSerializerOptions options)
+            => writer.WriteRawValue("""[{"$id":"1"},"x",{"$id":"2","name":"t"},{"$ref":"2"}]""");
+    }
+
+    [JsonConverter(typeof(IdOnlyInNestedArrayConverter))]
+    internal sealed class IdOnlyInNestedArrayHolder;
+
+    private sealed class IdOnlyInNestedArrayConverter: System.Text.Json.Serialization.JsonConverter<IdOnlyInNestedArrayHolder>
+    {
+        public override IdOnlyInNestedArrayHolder Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => throw new NotSupportedException();
+
+        public override void Write(Utf8JsonWriter writer, IdOnlyInNestedArrayHolder value, JsonSerializerOptions options)
+            => writer.WriteRawValue("""[[{"$id":"1"}],{"$id":"2","name":"t"},{"$ref":"2"}]""");
+    }
 
     private sealed class NonStringRefConverter: System.Text.Json.Serialization.JsonConverter<NonStringRefHolder>
     {
