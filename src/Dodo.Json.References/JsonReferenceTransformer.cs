@@ -651,6 +651,7 @@ public static class JsonReferenceTransformer
         }
     }
 
+    // Arena handle: offset in the high 32 bits, length in the low 32.
     private static ReadOnlySpan<byte> PathSlice(byte[] arena, long packed)
         => arena.AsSpan((int)(packed >> 32), (int)packed);
 
@@ -673,7 +674,6 @@ public static class JsonReferenceTransformer
         return packed;
     }
 
-    // Names are copied as raw escaped JSON bytes with RFC 6901 specials escaped ('/' ~1, '~' ~0).
     private static long AppendCurrentPath(
         ReadOnlySpan<byte> jsonSpan,
         ReadOnlySpan<PathSegment> pathStack,
