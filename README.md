@@ -123,9 +123,9 @@ the pair is single-operation — `PoolingReferenceResolver.Reset()` between docu
 
 ## Contracts
 
-- Metadata detection is name-based (`$id`/`$ref`/`$values`); reference ids must not require JSON
-  escaping; the encoder must not escape `/` or `~` in property names (default and
-  `UnsafeRelaxedJsonEscaping` never do).
+- Metadata detection is name-based (`$id`/`$ref`/`$values`). Ids that require JSON escaping and
+  property names whose `/` or `~` the encoder escapes are both handled; escaped ids fall off the
+  dense fast path onto a slower dictionary lookup.
 - Input must be `ReferenceHandler.Preserve`-shaped: a `$ref` never precedes its `$id` (STJ always
   writes them in that order). Forward references keep their original id string, untransformed.
 - Base options are snapshotted at construction — later mutations are not observed; the first lease
