@@ -412,6 +412,16 @@ internal sealed class JsonReferenceTransformerEdgeTests
     }
 
     [Test]
+    public async Task SurrogatePairPropertyName_DefaultEncoder_IsPercentEncodedAsUtf8Octets()
+    {
+        var shared = new Node { Name = "s" };
+        var json = await Serialize(new SurrogateNameGraph { Emoji = shared, Plain = shared }, PreserveOptions);
+
+        json.Should().Contain("\"$id\":\"#/a%F0%9F%98%80b\"");
+        json.Should().Contain("\"$ref\":\"#/a%F0%9F%98%80b\"");
+    }
+
+    [Test]
     public async Task EscapedRefToUnescapedNumericId_KeepsItsTarget()
     {
         var options = CustomIdOptions(n => n.ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -488,6 +498,14 @@ internal sealed class JsonReferenceTransformerEdgeTests
     {
         [JsonPropertyName("тест")]
         public Node? Cyrillic { get; set; }
+
+        public Node? Plain { get; set; }
+    }
+
+    internal sealed class SurrogateNameGraph
+    {
+        [JsonPropertyName("a😀b")]
+        public Node? Emoji { get; set; }
 
         public Node? Plain { get; set; }
     }
