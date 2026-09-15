@@ -107,7 +107,7 @@ internal sealed class JsonReferenceTransformerEdgeTests
         return new Pair { Left = shared, Right = shared };
     }
 
-    // Every shape TryParseNumericId rejects: non-digits, leading zero, past the dense bound (2^21), eight digits.
+    // Every shape NumericId.TryParse rejects: non-digits, leading zero, past the dense bound (2^21), eight digits.
     private static readonly Dictionary<string, Func<int, string>> NonCanonicalIdFactories = new()
     {
         ["short-alpha"] = n => $"id-{n}",
