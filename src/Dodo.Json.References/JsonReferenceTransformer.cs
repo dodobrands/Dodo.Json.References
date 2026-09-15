@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Buffers.Text;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO.Pipelines;
@@ -830,31 +831,21 @@ public static class JsonReferenceTransformer
                 return 2;
         }
 
-        var scalar = ParseHex4(tail[2..6]);
+        _ = Utf8Parser.TryParse(tail[2..6], out int scalar, out _, 'x');
         var consumed = 6;
-        if (char.IsHighSurrogate((char)scalar) && tail.Length >= 12 && tail[6] == (byte)'\\' && tail[7] == (byte)'u')
+        if (char.IsHighSurrogate((char)scalar)
+            && tail.Length >= 12
+            && tail[6] == (byte)'\\'
+            && tail[7] == (byte)'u'
+            && Utf8Parser.TryParse(tail[8..12], out int low, out _, 'x')
+            && char.IsLowSurrogate((char)low))
         {
-            var low = (char)ParseHex4(tail[8..12]);
-            if (char.IsLowSurrogate(low))
-            {
-                scalar = char.ConvertToUtf32((char)scalar, low);
-                consumed = 12;
-            }
+            scalar = char.ConvertToUtf32((char)scalar, (char)low);
+            consumed = 12;
         }
 
         written = (Rune.TryCreate(scalar, out var rune) ? rune : Rune.ReplacementChar).EncodeToUtf8(decoded);
         return consumed;
-    }
-
-    private static int ParseHex4(ReadOnlySpan<byte> hex)
-    {
-        var value = 0;
-        foreach (var c in hex)
-        {
-            value = (value << 4) + (c <= (byte)'9' ? c - (byte)'0' : (c | 0x20) - (byte)'a' + 10);
-        }
-
-        return value;
     }
 
     private static void CollectReferencedIds(
