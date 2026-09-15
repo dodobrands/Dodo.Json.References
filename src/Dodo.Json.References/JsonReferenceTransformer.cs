@@ -3,36 +3,21 @@ using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO.Pipelines;
 using System.Numerics;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 
 namespace Dodo.Json.References;
 
-/// <remarks>Ids must not require JSON escaping and the encoder must not escape '/' or '~' in property names (default and UnsafeRelaxed never do).</remarks>
+/// <remarks>Pointers are emitted in the RFC 6901 section 6 URI-fragment form: section 3 escaping (~0/~1) then RFC 3986 percent-encoding.</remarks>
 public static class JsonReferenceTransformer
 {
-    // Covers the reader's default MaxDepth of 64; deeper documents spill into pooled growth.
-    private const int StackAllocPathDepth = 80;
-
-    // Hoisted to one per-document scratch: zero-init is paid once, not per path.
-    private const int PathScratchSize = 512;
-
-    private const int StackAllocIdCount = 128;
     private const int IdDecodeSpanSize = 64;
-
-    // Exclusive: renting bound + 1 slots would round up to the next ArrayPool bucket (32MB, not 16MB).
-    private const uint MaxDenseNumericId = 1 << 21;
 
     private const int StreamSegmentSize = 64 * 1024;
 
     private static readonly StreamPipeWriterOptions StreamOutputOptions =
         new(minimumBufferSize: StreamSegmentSize, leaveOpen: true);
-
-    // Learned grow floor, capped so one pathological document cannot inflate it for good.
-    private const int MaxReferencedIdsHint = 65_536;
-    private static int _referencedIdsHint = 4096;
 
     private static ReadOnlySpan<byte> Utf8Id
         => "$id"u8;
@@ -43,28 +28,12 @@ public static class JsonReferenceTransformer
     private static ReadOnlySpan<byte> Utf8Values
         => "$values"u8;
 
-    private static ReadOnlySpan<byte> RefPattern
-        => "\"$ref\":\""u8;
-
     private static readonly JsonEncodedText EncodedId = JsonEncodedText.Encode(Utf8Id);
     private static readonly JsonEncodedText EncodedRef = JsonEncodedText.Encode(Utf8Ref);
     private static readonly JsonEncodedText EncodedValues = JsonEncodedText.Encode(Utf8Values);
 
-    private static readonly byte[] RootPathBytes = [.. "\"#\""u8];
-
     private const string ReflectionSerializationMessage =
         "Serializing from JsonSerializerOptions resolves metadata by reflection; use the JsonTypeInfo<T> overload under trimming or Native AOT.";
-
-    // Negative PropertyNameOffset = nameless segment ($values wrapper or array-in-array): contributes only its index.
-    [StructLayout(LayoutKind.Sequential)]
-    private struct PathSegment
-    {
-        public int PropertyNameOffset;
-        public int PropertyNameLength;
-        public int ArrayIndex;
-        public bool IsArray;
-    }
-
     /// <summary>Serializes <paramref name="payload"/> to <paramref name="output"/> with every <c>$id</c>/<c>$ref</c> rewritten to an RFC 6901 JSON Pointer.</summary>
     [RequiresUnreferencedCode(ReflectionSerializationMessage)]
     [RequiresDynamicCode(ReflectionSerializationMessage)]
@@ -170,24 +139,30 @@ public static class JsonReferenceTransformer
         };
 
     // PipeWriter wrapping keeps the writer in IBufferWriter mode: pooled segments instead of buffering the whole document.
-    private static async ValueTask TransformToStream(
+    internal static async ValueTask TransformToStream(
         ReadOnlyMemory<byte> jsonBytes,
         Stream output,
         JsonSerializerOptions options,
         CancellationToken ct)
     {
         var pipeWriter = PipeWriter.Create(output, StreamOutputOptions);
+        Exception? failure = null;
         try
         {
             await TransformToPipe(jsonBytes, pipeWriter, options, ct).ConfigureAwait(false);
         }
+        catch (Exception ex)
+        {
+            failure = ex;
+            throw;
+        }
         finally
         {
-            await pipeWriter.CompleteAsync().ConfigureAwait(false);
+            await pipeWriter.CompleteAsync(failure).ConfigureAwait(false);
         }
     }
 
-    private static async ValueTask TransformToPipe(
+    internal static async ValueTask TransformToPipe(
         ReadOnlyMemory<byte> jsonBytes,
         PipeWriter output,
         JsonSerializerOptions options,
@@ -200,7 +175,11 @@ public static class JsonReferenceTransformer
         }
 
         // Utf8JsonWriter.DisposeAsync with IBufferWriter only calls Advance(), not FlushAsync()
-        await output.FlushAsync(ct).ConfigureAwait(false);
+        var flush = await output.FlushAsync(ct).ConfigureAwait(false);
+        if (flush.IsCanceled)
+        {
+            throw new OperationCanceledException();
+        }
     }
 
     private static ValueTask TransformCore(
@@ -212,45 +191,58 @@ public static class JsonReferenceTransformer
         ct.ThrowIfCancellationRequested();
 
         PathSegment[]? rentedPathStack = null;
-        Span<PathSegment> pathStack = stackalloc PathSegment[StackAllocPathDepth];
-        Span<byte> pathScratch = stackalloc byte[PathScratchSize];
+        Span<PathSegment> pathStack = stackalloc PathSegment[PointerPathBuilder.StackAllocDepth];
+        Span<byte> pathScratch = stackalloc byte[PointerPathBuilder.ScratchSize];
         var pathStackDepth = 0;
         var jsonSpan = jsonBytes.Span;
 
-        // Pass 1: byte-scan for "$ref":" — decimal ids into the stack-first builder, exotic ones into a lazy overflow set.
-        HashSet<string>? referencedOverflow = null;
-        var referencedIds = new PooledSpanBuilder<uint>(
-            stackalloc uint[StackAllocIdCount],
-            growFloor: Volatile.Read(ref _referencedIdsHint)
-        );
-        CollectReferencedIds(jsonSpan, ref referencedIds, out var maxNumericId, ref referencedOverflow);
-
-        // Dense structures are wiped only for the used range and returned dirty; every access is max-id-guarded.
-        var bitmapWords = (int)(maxNumericId >> 6) + 1;
-        var referencedBitmap = ArrayPool<ulong>.Shared.Rent(bitmapWords);
-        Array.Clear(referencedBitmap, 0, bitmapWords);
-        foreach (var id in referencedIds.WrittenSpan)
-        {
-            referencedBitmap[id >> 6] |= 1UL << (int)id;
-        }
-
-        referencedIds.Dispose();
-
-        var trackedIdCount = 0;
-        for (var w = 0; w < bitmapWords; w++)
-        {
-            trackedIdCount += BitOperations.PopCount(referencedBitmap[w]);
-        }
-
-        var idPaths = ArrayPool<byte[]?>.Shared.Rent((int)maxNumericId + 1);
-        ClearTrackedIdPaths(idPaths, referencedBitmap, bitmapWords, maxNumericId, trackedIdCount);
+        ulong[]? referencedBitmap = null;
+        long[]? idPaths = null;
+        var pathArena = Array.Empty<byte>();
+        var pathArenaUsed = 0;
 
         try
         {
+            // Pass 1: byte-scan for "$ref":" — decimal ids into the stack-first builder, exotic ones into a lazy overflow set.
+            HashSet<string>? referencedOverflow = null;
+            uint maxNumericId;
+            int bitmapWords;
+            var referencedIds = new PooledSpanBuilder<uint>(
+                stackalloc uint[ReferencedIdScanner.StackAllocIdCount],
+                growFloor: ReferencedIdScanner.SizeHint
+            );
+            try
+            {
+                ReferencedIdScanner.Collect(jsonSpan, ref referencedIds, out maxNumericId, ref referencedOverflow);
+
+                bitmapWords = (int)(maxNumericId >> 6) + 1;
+                referencedBitmap = ArrayPool<ulong>.Shared.Rent(bitmapWords);
+                Array.Clear(referencedBitmap, 0, bitmapWords);
+                foreach (var id in referencedIds.WrittenSpan)
+                {
+                    referencedBitmap[id >> 6] |= 1UL << (int)id;
+                }
+            }
+            finally
+            {
+                referencedIds.Dispose();
+            }
+
+            var trackedIdCount = 0;
+            for (var w = 0; w < bitmapWords; w++)
+            {
+                trackedIdCount += BitOperations.PopCount(referencedBitmap[w]);
+            }
+
+            idPaths = ArrayPool<long>.Shared.Rent((int)maxNumericId + 1);
+            PointerPathBuilder.ClearTrackedIdPaths(idPaths, referencedBitmap, bitmapWords, maxNumericId, trackedIdCount);
+            var arenaEstimate = (long)(trackedIdCount + (referencedOverflow?.Count ?? 0)) * 48;
+            pathArena = ArrayPool<byte>.Shared.Rent((int)Math.Clamp(arenaEstimate, 1024, 1 << 22));
+
             // Pass 2: transform and write, dropping unreferenced $id properties.
             var reader = new Utf8JsonReader(jsonBytes.Span, new JsonReaderOptions { MaxDepth = maxDepth });
 
-            Dictionary<string, byte[]>? idToPathOverflow = null;
+            Dictionary<string, long>? idToPathOverflow = null;
             Span<char> idDecodeSpan = stackalloc char[IdDecodeSpanSize];
             Span<char> pendingDroppedId = stackalloc char[IdDecodeSpanSize];
             string? pendingDroppedIdString = null;
@@ -270,7 +262,7 @@ public static class JsonReferenceTransformer
                         if (pendingPropertyOffset >= 0)
                         {
                             if (pathStackDepth == pathStack.Length)
-                                pathStack = GrowPathStack(pathStack, ref rentedPathStack);
+                                pathStack = PointerPathBuilder.GrowPathStack(pathStack, ref rentedPathStack);
 
                             pathStack[pathStackDepth++] = new PathSegment
                             {
@@ -288,6 +280,7 @@ public static class JsonReferenceTransformer
                                 top.ArrayIndex++;
                         }
 
+                        isRefProperty = false;
                         writer.WriteStartObject();
                         break;
 
@@ -304,12 +297,13 @@ public static class JsonReferenceTransformer
 
                     case JsonTokenType.StartArray:
                         if (pathStackDepth == pathStack.Length)
-                            pathStack = GrowPathStack(pathStack, ref rentedPathStack);
+                            pathStack = PointerPathBuilder.GrowPathStack(pathStack, ref rentedPathStack);
 
                         if (isPendingValuesProperty)
                         {
                             // $values is transparent in pointer paths: index-only segment, no name, no enclosing-index bump.
                             isPendingValuesProperty = false;
+                            pendingPropertyOffset = -1;
                             pathStack[pathStackDepth++] = new PathSegment
                             {
                                 PropertyNameOffset = -1,
@@ -348,6 +342,7 @@ public static class JsonReferenceTransformer
                             };
                         }
 
+                        isRefProperty = false;
                         writer.WriteStartArray();
                         break;
 
@@ -367,16 +362,19 @@ public static class JsonReferenceTransformer
                         {
                             reader.Read();
 
-                            if (TryReadNumericId(ref reader, out var numericId))
+                            if (NumericId.TryRead(ref reader, idDecodeSpan, out var numericId))
                             {
                                 if (numericId <= maxNumericId
                                     && (referencedBitmap[numericId >> 6] & (1UL << (int)numericId)) != 0)
                                 {
                                     ref var pathRef = ref idPaths[numericId];
-                                    pathRef ??= BuildCurrentPath(jsonSpan, pathStack, pathStackDepth, pathScratch);
+                                    if (pathRef == 0)
+                                    {
+                                        pathRef = PointerPathBuilder.AppendCurrentPath(jsonSpan, pathStack, pathStackDepth, pathScratch, ref pathArena, ref pathArenaUsed);
+                                    }
 
                                     writer.WritePropertyName(EncodedId);
-                                    writer.WriteRawValue(pathRef, skipInputValidation: true);
+                                    writer.WriteRawValue(PointerPathBuilder.Slice(pathArena, pathRef), skipInputValidation: true);
                                 }
                                 else
                                 {
@@ -405,7 +403,7 @@ public static class JsonReferenceTransformer
                             if (referencedOverflow is not null
                                 && referencedOverflow.GetAlternateLookup<ReadOnlySpan<char>>().Contains(idSlice))
                             {
-                                idToPathOverflow ??= new Dictionary<string, byte[]>();
+                                idToPathOverflow ??= new Dictionary<string, long>();
                                 ref var pathRef = ref CollectionsMarshal.GetValueRefOrAddDefault(
                                     idToPathOverflow.GetAlternateLookup<ReadOnlySpan<char>>(),
                                     idSlice,
@@ -414,11 +412,11 @@ public static class JsonReferenceTransformer
 
                                 if (!exists)
                                 {
-                                    pathRef = BuildCurrentPath(jsonSpan, pathStack, pathStackDepth, pathScratch);
+                                    pathRef = PointerPathBuilder.AppendCurrentPath(jsonSpan, pathStack, pathStackDepth, pathScratch, ref pathArena, ref pathArenaUsed);
                                 }
 
                                 writer.WritePropertyName(EncodedId);
-                                writer.WriteRawValue(pathRef!, skipInputValidation: true);
+                                writer.WriteRawValue(PointerPathBuilder.Slice(pathArena, pathRef), skipInputValidation: true);
                             }
                             else if (idString is null)
                             {
@@ -434,6 +432,9 @@ public static class JsonReferenceTransformer
 
                             break;
                         }
+
+                        pendingPropertyOffset = (int)reader.TokenStartIndex + 1; // skip opening quote
+                        pendingPropertyLength = propSpan.Length;
 
                         if (pendingDroppedIdLen != -1)
                         {
@@ -469,22 +470,14 @@ public static class JsonReferenceTransformer
                             writer.WritePropertyName(EncodedValues);
                             isPendingValuesProperty = true;
                         }
+                        else if (!reader.ValueIsEscaped)
+                        {
+                            writer.WritePropertyName(propSpan);
+                        }
                         else
                         {
-                            pendingPropertyOffset = (int)reader.TokenStartIndex + 1; // skip opening quote
-
-                            if (!reader.ValueIsEscaped)
-                            {
-                                writer.WritePropertyName(propSpan);
-                                pendingPropertyLength = propSpan.Length;
-                            }
-                            else
-                            {
-                                // propSpan is still escaped here; raw re-emission would double-escape.
-                                writer.WritePropertyName(reader.GetString()!);
-                                pendingPropertyLength = jsonSpan[pendingPropertyOffset..(int)reader.BytesConsumed]
-                                    .LastIndexOf((byte)'"');
-                            }
+                            // propSpan is still escaped here; raw re-emission would double-escape.
+                            writer.WritePropertyName(reader.GetString()!);
                         }
 
                         break;
@@ -495,12 +488,12 @@ public static class JsonReferenceTransformer
                             pendingPropertyOffset = -1;
                             // The bit test keeps refs the pass-1 scan never saw (a converter's WriteRawValue can
                             // emit "$ref" with arbitrary spacing) away from slots the sparse rent-clear skipped.
-                            if (TryReadNumericId(ref reader, out var numericRefId)
+                            if (NumericId.TryRead(ref reader, idDecodeSpan, out var numericRefId)
                                 && numericRefId <= maxNumericId
                                 && (referencedBitmap[numericRefId >> 6] & (1UL << (int)numericRefId)) != 0
-                                && idPaths[numericRefId] is { } numericPath)
+                                && idPaths[numericRefId] != 0)
                             {
-                                writer.WriteRawValue(numericPath, skipInputValidation: true);
+                                writer.WriteRawValue(PointerPathBuilder.Slice(pathArena, idPaths[numericRefId]), skipInputValidation: true);
                             }
                             else
                             {
@@ -519,7 +512,7 @@ public static class JsonReferenceTransformer
                                     && idToPathOverflow.GetAlternateLookup<ReadOnlySpan<char>>()
                                         .TryGetValue(refIdSlice, out var overflowPath))
                                 {
-                                    writer.WriteRawValue(overflowPath, skipInputValidation: true);
+                                    writer.WriteRawValue(PointerPathBuilder.Slice(pathArena, overflowPath), skipInputValidation: true);
                                 }
                                 else
                                 {
@@ -531,7 +524,7 @@ public static class JsonReferenceTransformer
                         }
                         else
                         {
-                            BumpIndexForArrayElement(pathStack, pathStackDepth, pendingPropertyOffset);
+                            PointerPathBuilder.BumpIndexForArrayElement(pathStack, pathStackDepth, pendingPropertyOffset);
                             pendingPropertyOffset = -1;
                             var tokenStart = (int)reader.TokenStartIndex;
                             var tokenEnd = (int)reader.BytesConsumed;
@@ -541,27 +534,31 @@ public static class JsonReferenceTransformer
                         break;
 
                     case JsonTokenType.Number:
-                        BumpIndexForArrayElement(pathStack, pathStackDepth, pendingPropertyOffset);
+                        PointerPathBuilder.BumpIndexForArrayElement(pathStack, pathStackDepth, pendingPropertyOffset);
                         pendingPropertyOffset = -1;
                         // Raw copy preserves exact format (439.0 vs 439).
+                        isRefProperty = false;
                         writer.WriteRawValue(reader.ValueSpan, skipInputValidation: true);
                         break;
 
                     case JsonTokenType.True:
-                        BumpIndexForArrayElement(pathStack, pathStackDepth, pendingPropertyOffset);
+                        PointerPathBuilder.BumpIndexForArrayElement(pathStack, pathStackDepth, pendingPropertyOffset);
                         pendingPropertyOffset = -1;
+                        isRefProperty = false;
                         writer.WriteBooleanValue(true);
                         break;
 
                     case JsonTokenType.False:
-                        BumpIndexForArrayElement(pathStack, pathStackDepth, pendingPropertyOffset);
+                        PointerPathBuilder.BumpIndexForArrayElement(pathStack, pathStackDepth, pendingPropertyOffset);
                         pendingPropertyOffset = -1;
+                        isRefProperty = false;
                         writer.WriteBooleanValue(false);
                         break;
 
                     case JsonTokenType.Null:
-                        BumpIndexForArrayElement(pathStack, pathStackDepth, pendingPropertyOffset);
+                        PointerPathBuilder.BumpIndexForArrayElement(pathStack, pathStackDepth, pendingPropertyOffset);
                         pendingPropertyOffset = -1;
+                        isRefProperty = false;
                         writer.WriteNullValue();
                         break;
                 }
@@ -574,222 +571,22 @@ public static class JsonReferenceTransformer
                 ArrayPool<PathSegment>.Shared.Return(rentedPathStack);
             }
 
-            ClearTrackedIdPaths(idPaths, referencedBitmap, bitmapWords, maxNumericId, trackedIdCount);
-            ArrayPool<ulong>.Shared.Return(referencedBitmap);
-            ArrayPool<byte[]?>.Shared.Return(idPaths);
+            if (referencedBitmap is not null)
+            {
+                ArrayPool<ulong>.Shared.Return(referencedBitmap);
+            }
+
+            if (idPaths is not null)
+            {
+                ArrayPool<long>.Shared.Return(idPaths);
+            }
+
+            if (pathArena.Length > 0)
+            {
+                ArrayPool<byte>.Shared.Return(pathArena);
+            }
         }
 
         return ValueTask.CompletedTask;
-    }
-
-    // Null the tracked (set-bit) slots on rent and return; dense bitmaps memset instead.
-    private static void ClearTrackedIdPaths(byte[]?[] idPaths, ulong[] referencedBitmap, int bitmapWords, uint maxNumericId, int trackedIdCount)
-    {
-        // Measured crossover: ~1/16-1/8 density on 128B-line arm64, higher on 64B-line x64; a too-low
-        // threshold costs a full-range memset on large sparse ranges, so 1/8 errs on the cheap side.
-        if (trackedIdCount > (int)(maxNumericId >> 3))
-        {
-            Array.Clear(idPaths, 0, (int)maxNumericId + 1);
-        }
-        else
-        {
-            // Set bits cover every slot pass 2 can touch (a dangling $ref's slot is tracked but never written).
-            for (var w = 0; w < bitmapWords; w++)
-            {
-                var word = referencedBitmap[w];
-                while (word != 0)
-                {
-                    idPaths[(w << 6) + BitOperations.TrailingZeroCount(word)] = null;
-                    word &= word - 1;
-                }
-            }
-        }
-    }
-
-    // Names are copied as raw escaped JSON bytes with RFC 6901 specials escaped ('/' ~1, '~' ~0).
-    private static byte[] BuildCurrentPath(
-        ReadOnlySpan<byte> jsonSpan,
-        ReadOnlySpan<PathSegment> pathStack,
-        int depth,
-        Span<byte> scratch)
-    {
-        if (depth == 0)
-            return RootPathBytes;
-
-        var path = new PooledSpanBuilder<byte>(scratch);
-        path.Append((byte)'"');
-        path.Append((byte)'#');
-
-        var segments = pathStack[..depth];
-        for (var i = 0; i < segments.Length; i++)
-        {
-            ref readonly var seg = ref segments[i];
-
-            // Worst case per segment: separators + fully escaped name + ten index digits + quote.
-            path.EnsureFree(2 * seg.PropertyNameLength + 13);
-            var dst = path.FreeSpan;
-            var pos = 0;
-            if (seg.PropertyNameOffset >= 0)
-            {
-                var propNameSpan = jsonSpan.Slice(seg.PropertyNameOffset, seg.PropertyNameLength);
-                dst[pos++] = (byte)'/';
-                if (!propNameSpan.ContainsAny((byte)'/', (byte)'~'))
-                {
-                    propNameSpan.CopyTo(dst[pos..]);
-                    pos += propNameSpan.Length;
-                }
-                else
-                {
-                    pos = WritePointerEscaped(propNameSpan, dst, pos);
-                }
-            }
-
-            if (seg is { IsArray: true, ArrayIndex: >= 0 })
-            {
-                dst[pos++] = (byte)'/';
-                seg.ArrayIndex.TryFormat(dst[pos..], out var written, provider: CultureInfo.InvariantCulture);
-                pos += written;
-            }
-
-            path.Advance(pos);
-        }
-
-        path.Append((byte)'"');
-
-        var result = path.ToArray();
-        path.Dispose();
-        return result;
-    }
-
-    private static int WritePointerEscaped(ReadOnlySpan<byte> propertyName, Span<byte> buffer, int pos)
-    {
-        foreach (var b in propertyName)
-        {
-            switch (b)
-            {
-                case (byte)'/':
-                    buffer[pos++] = (byte)'~';
-                    buffer[pos++] = (byte)'1';
-                    break;
-                case (byte)'~':
-                    buffer[pos++] = (byte)'~';
-                    buffer[pos++] = (byte)'0';
-                    break;
-                default:
-                    buffer[pos++] = b;
-                    break;
-            }
-        }
-
-        return pos;
-    }
-
-    private static void CollectReferencedIds(
-        ReadOnlySpan<byte> jsonSpan,
-        ref PooledSpanBuilder<uint> ids,
-        out uint maxNumericId,
-        ref HashSet<string>? overflow)
-    {
-        maxNumericId = 0;
-        var remaining = jsonSpan;
-
-        while (true)
-        {
-            var idx = remaining.IndexOf(RefPattern);
-            if (idx < 0)
-                break;
-
-            remaining = remaining[(idx + RefPattern.Length)..];
-
-            var endQuote = remaining.IndexOf((byte)'"');
-            if (endQuote < 0)
-                break;
-
-            var idBytes = remaining[..endQuote];
-            if (TryParseNumericId(idBytes, out var numericId))
-            {
-                ids.Append(numericId);
-                if (numericId > maxNumericId)
-                {
-                    maxNumericId = numericId;
-                }
-            }
-            else
-            {
-                overflow ??= [];
-                overflow.Add(System.Text.Encoding.UTF8.GetString(idBytes));
-            }
-
-            remaining = remaining[(endQuote + 1)..];
-        }
-
-        var learned = Math.Min(MaxReferencedIdsHint, (long)BitOperations.RoundUpToPowerOf2((uint)ids.Count));
-        InterlockedMath.Max(ref _referencedIdsHint, (int)learned);
-    }
-
-    // Digits only, no leading zero, under the dense bound — exotic ids can never alias a dense slot.
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool TryParseNumericId(ReadOnlySpan<byte> value, out uint id)
-    {
-        id = 0;
-        if (value.Length is < 1 or > 7 || (value[0] == (byte)'0' && value.Length != 1))
-        {
-            return false;
-        }
-
-        uint parsed = 0;
-        foreach (var b in value)
-        {
-            var digit = (uint)(b - (byte)'0');
-            if (digit > 9)
-            {
-                return false;
-            }
-
-            parsed = parsed * 10 + digit;
-        }
-
-        if (parsed >= MaxDenseNumericId)
-        {
-            return false;
-        }
-
-        id = parsed;
-        return true;
-    }
-
-    private static bool TryReadNumericId(ref Utf8JsonReader reader, out uint id)
-    {
-        if (!reader.ValueIsEscaped)
-        {
-            return TryParseNumericId(reader.ValueSpan, out id);
-        }
-
-        id = 0;
-        return false;
-    }
-
-    // Primitive and null array elements advance the enclosing index too, or later pointer paths drift.
-    private static void BumpIndexForArrayElement(Span<PathSegment> pathStack, int depth, int pendingPropertyOffset)
-    {
-        if (pendingPropertyOffset >= 0 || depth == 0)
-            return;
-
-        ref var top = ref pathStack[depth - 1];
-        if (top.IsArray)
-            top.ArrayIndex++;
-    }
-
-    private static Span<PathSegment> GrowPathStack(Span<PathSegment> current, ref PathSegment[]? rented)
-    {
-        var grown = ArrayPool<PathSegment>.Shared.Rent(current.Length * 2);
-        current.CopyTo(grown);
-        if (rented is not null)
-        {
-            ArrayPool<PathSegment>.Shared.Return(rented);
-        }
-
-        rented = grown;
-        return grown;
     }
 }

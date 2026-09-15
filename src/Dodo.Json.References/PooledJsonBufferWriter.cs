@@ -8,7 +8,6 @@ internal sealed class PooledJsonBufferWriter: IBufferWriter<byte>, IDisposable
 {
     private const int InitialCapacity = 64 * 1024;
 
-    // Cap: one pathological document must not permanently inflate every future rent.
     private const int MaxCapacityHint = 64 * 1024 * 1024;
 
     private static int _initialCapacityHint = InitialCapacity;

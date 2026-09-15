@@ -18,6 +18,7 @@
     </ItemGroup>
 
     <ItemGroup>
+        <InternalsVisibleTo Include="Dodo.Json.References.Benchmarks" />
         <InternalsVisibleTo Include="Dodo.Json.References.Tests" />
     </ItemGroup>
 
