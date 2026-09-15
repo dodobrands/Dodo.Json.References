@@ -75,7 +75,7 @@ internal sealed class PooledReferenceSerializerTests
         var roundTripped = await Deserialize(deserializer, bytes);
 
         roundTripped.Should().NotBeNull();
-        roundTripped!.Left.Should().BeSameAs(roundTripped.Right, "the shared $ref must resolve to one instance");
+        roundTripped.Left.Should().BeSameAs(roundTripped.Right, "the shared $ref must resolve to one instance");
         roundTripped.Left.Name.Should().Be("shared");
     }
 
@@ -92,7 +92,7 @@ internal sealed class PooledReferenceSerializerTests
         {
             var roundTripped = await Deserialize(deserializer, bytes);
             roundTripped.Should().NotBeNull($"reuse iteration {iteration} must deserialize");
-            roundTripped!.Left.Should().BeSameAs(roundTripped.Right, $"reuse iteration {iteration} must re-link the shared ref");
+            roundTripped.Left.Should().BeSameAs(roundTripped.Right, $"reuse iteration {iteration} must re-link the shared ref");
             roundTripped.Left.Name.Should().Be("shared");
         }
     }
