@@ -478,6 +478,32 @@ internal sealed class JsonReferenceTransformerEdgeTests
         json.Should().Contain("\"$ref\":\"#/1\"");
     }
 
+    [Test]
+    public async Task ValuesDictionaryKeyWithScalarValue_DoesNotSwallowTheNextPropertyName()
+    {
+        var shared = new Node { Name = "shared" };
+        var json = await Serialize(new { d = new Dictionary<string, int> { ["$values"] = 1 }, x = new[] { new[] { shared } }, y = shared }, PreserveOptions);
+
+        json.Should().Contain("\"$id\":\"#/x/0/0\"");
+        json.Should().Contain("\"$ref\":\"#/x/0/0\"");
+    }
+
+    [Test]
+    public async Task IdDictionaryKeyWithNumberValue_IsKeptAsData()
+    {
+        var json = await Serialize(new Dictionary<string, int> { ["$id"] = 5, ["b"] = 1 }, PreserveOptions);
+
+        json.Should().Contain("\"$id\":5");
+    }
+
+    [Test]
+    public async Task IdDictionaryKeyWithObjectValue_IsKeptAsData()
+    {
+        var json = await Serialize(new Dictionary<string, Node> { ["$id"] = new() { Name = "t" } }, PreserveOptions);
+
+        json.Should().Contain("\"$id\":{\"name\":\"t\"}");
+    }
+
     internal sealed class PercentNameGraph
     {
         [JsonPropertyName("c%d")]
