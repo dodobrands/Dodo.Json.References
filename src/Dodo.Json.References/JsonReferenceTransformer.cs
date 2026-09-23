@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO.Pipelines;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 
@@ -194,6 +195,8 @@ public static class JsonReferenceTransformer
         ct.ThrowIfCancellationRequested();
 
         PathSegment[]? rentedPathStack = null;
+        byte[]? rentedIndentScratch = null;
+        var indented = writer.Options.Indented;
         Span<PathSegment> pathStack = stackalloc PathSegment[PointerPathBuilder.StackAllocDepth];
         Span<byte> pathScratch = stackalloc byte[PointerPathBuilder.ScratchSize];
         var pathStackDepth = 0;
@@ -523,22 +526,24 @@ public static class JsonReferenceTransformer
                         }
                         else
                         {
+                            var isStringElement = pendingPropertyOffset < 0;
                             PointerPathBuilder.BumpIndexForArrayElement(pathStack, pathStackDepth, pendingPropertyOffset);
                             pendingPropertyOffset = -1;
                             var tokenStart = (int)reader.TokenStartIndex;
                             var tokenEnd = (int)reader.BytesConsumed;
-                            writer.WriteRawValue(jsonSpan[tokenStart..tokenEnd], skipInputValidation: true);
+                            WriteRawScalar(writer, jsonSpan[tokenStart..tokenEnd], indented && isStringElement, ref rentedIndentScratch);
                         }
 
                         pendingMetadata = PendingMetadata.None;
                         break;
 
                     case JsonTokenType.Number:
+                        var isNumberElement = pendingPropertyOffset < 0;
                         PointerPathBuilder.BumpIndexForArrayElement(pathStack, pathStackDepth, pendingPropertyOffset);
                         pendingPropertyOffset = -1;
                         // Raw copy preserves exact format (439.0 vs 439).
                         pendingMetadata = PendingMetadata.None;
-                        writer.WriteRawValue(reader.ValueSpan, skipInputValidation: true);
+                        WriteRawScalar(writer, reader.ValueSpan, indented && isNumberElement, ref rentedIndentScratch);
                         break;
 
                     case JsonTokenType.True:
@@ -571,6 +576,11 @@ public static class JsonReferenceTransformer
                 ArrayPool<PathSegment>.Shared.Return(rentedPathStack);
             }
 
+            if (rentedIndentScratch is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rentedIndentScratch);
+            }
+
             if (referencedBitmap is not null)
             {
                 ArrayPool<ulong>.Shared.Return(referencedBitmap);
@@ -588,6 +598,35 @@ public static class JsonReferenceTransformer
         }
 
         return ValueTask.CompletedTask;
+    }
+
+    private static void WriteRawScalar(Utf8JsonWriter writer, ReadOnlySpan<byte> value, bool isIndentedElement, ref byte[]? scratch)
+    {
+        if (!isIndentedElement || writer.CurrentDepth == 0)
+        {
+            writer.WriteRawValue(value, skipInputValidation: true);
+            return;
+        }
+
+        // WriteRawValue emits the separator but not the newline and indentation an indented writer puts before an array element.
+        var options = writer.Options;
+        var indentLength = options.IndentSize * writer.CurrentDepth;
+        var length = options.NewLine.Length + indentLength + value.Length;
+        if (scratch is null || scratch.Length < length)
+        {
+            if (scratch is not null)
+            {
+                ArrayPool<byte>.Shared.Return(scratch);
+            }
+
+            scratch = ArrayPool<byte>.Shared.Rent(length);
+        }
+
+        var element = scratch.AsSpan(0, length);
+        var newLineLength = Encoding.UTF8.GetBytes(options.NewLine, element);
+        element.Slice(newLineLength, indentLength).Fill((byte)options.IndentCharacter);
+        value.CopyTo(element[(newLineLength + indentLength)..]);
+        writer.WriteRawValue(element, skipInputValidation: true);
     }
 
     private static bool IsStringValueNext(ReadOnlySpan<byte> json, int afterName)

@@ -504,6 +504,31 @@ internal sealed class JsonReferenceTransformerEdgeTests
         json.Should().Contain("\"$id\":{\"name\":\"t\"}");
     }
 
+    [TestCase(' ', 2, "\n")]
+    [TestCase('\t', 1, "\r\n")]
+    public async Task WriteIndented_PutsEveryArrayElementOnItsOwnLine(char indentCharacter, int indentSize, string newLine)
+    {
+        var shared = new Node { Name = "shared" };
+        var payload = new { items = new object?[] { shared, 1, "s", new[] { 2, 3 }, true, null, 1.5 }, empty = Array.Empty<int>(), back = shared };
+        var indented = new JsonSerializerOptions(PreserveOptions) { WriteIndented = true, IndentCharacter = indentCharacter, IndentSize = indentSize, NewLine = newLine };
+
+        var json = await Serialize(payload, indented);
+
+        json.Should().Be(Reindent(await Serialize(payload, PreserveOptions), indented));
+    }
+
+    private static string Reindent(string compact, JsonSerializerOptions options)
+    {
+        using var document = JsonDocument.Parse(compact);
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true, IndentCharacter = options.IndentCharacter, IndentSize = options.IndentSize, NewLine = options.NewLine }))
+        {
+            document.WriteTo(writer);
+        }
+
+        return System.Text.Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
     internal sealed class PercentNameGraph
     {
         [JsonPropertyName("c%d")]
