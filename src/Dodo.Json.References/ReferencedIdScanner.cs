@@ -15,7 +15,7 @@ internal static class ReferencedIdScanner
         => Volatile.Read(ref _sizeHint);
 
     private static ReadOnlySpan<byte> RefPattern
-        => "\"$ref\":\""u8;
+        => "\"$ref\":"u8;
 
     internal static void Collect(
         ReadOnlySpan<byte> jsonSpan,
@@ -33,7 +33,18 @@ internal static class ReferencedIdScanner
             if (idx < 0)
                 break;
 
-            var quoteAt = offset + idx + RefPattern.Length - 1;
+            var afterColon = offset + idx + RefPattern.Length;
+            var gap = jsonSpan[afterColon..].IndexOfAnyExcept(JsonReferenceTransformer.JsonWhitespace);
+            if (gap < 0)
+                break;
+
+            var quoteAt = afterColon + gap;
+            if (jsonSpan[quoteAt] != (byte)'"')
+            {
+                offset = quoteAt;
+                continue;
+            }
+
             var valueAt = quoteAt + 1;
 
             var endQuote = jsonSpan[valueAt..].IndexOf((byte)'"');

@@ -169,7 +169,7 @@ internal sealed class JsonReferenceTransformerEdgeTests
             => throw new NotSupportedException();
 
         public override void Write(Utf8JsonWriter writer, RawRefHolder value, JsonSerializerOptions options)
-            => writer.WriteRawValue("{\"$ref\": \"1\"}");
+            => writer.WriteRawValue("{\"$ref\" : \"1\"}");
     }
 
     internal sealed class RawRefGraph
@@ -187,15 +187,36 @@ internal sealed class JsonReferenceTransformerEdgeTests
         dirty[1] = 3L;
         System.Buffers.ArrayPool<long>.Shared.Return(dirty);
 
-        // "$ref": "1" (with a space) is invisible to the pass-1 byte scan, so slot 1 is untracked; ids are
+        // "$ref" : "1" (a space before the colon) is invisible to the pass-1 byte scan, so slot 1 is untracked; ids are
         // spread 100 apart to keep density under 1/8 so the rent-clear takes the sparse branch and skips it.
         var options = CustomIdOptions(n => (n * 100).ToString(System.Globalization.CultureInfo.InvariantCulture));
         options.Converters.Add(new RawRefConverter());
         var shared = new Node { Name = "s" };
         var json = await Serialize(new RawRefGraph { Raw = new RawRefHolder(), Left = shared, Right = shared }, options);
 
-        json.Should().Contain("\"$ref\":\"1\"", "a scan-invisible ref must pass through verbatim");
+        json.Should().Contain("\"$ref\" : \"1\"", "a scan-invisible ref must pass through verbatim");
         json.Should().Contain("\"$ref\":\"#/left\"", "tracked refs still transform");
+    }
+
+    [JsonConverter(typeof(SpacedRefConverter))]
+    internal sealed class SpacedRefHolder;
+
+    private sealed class SpacedRefConverter: System.Text.Json.Serialization.JsonConverter<SpacedRefHolder>
+    {
+        public override SpacedRefHolder Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => throw new NotSupportedException();
+
+        public override void Write(Utf8JsonWriter writer, SpacedRefHolder value, JsonSerializerOptions options)
+            => writer.WriteRawValue("""{"$ref": "2"}""");
+    }
+
+    [Test]
+    public async Task RawConverterRefWithSpaceAfterColon_KeepsItsTarget()
+    {
+        var json = await Serialize(new { target = new Node { Name = "t" }, raw = new SpacedRefHolder() }, PreserveOptions);
+
+        json.Should().Contain("\"target\":{\"$id\":\"#/target\"");
+        json.Should().Contain("\"raw\":{\"$ref\": \"#/target\"}");
     }
 
     [Test]
@@ -502,6 +523,41 @@ internal sealed class JsonReferenceTransformerEdgeTests
         var json = await Serialize(new Dictionary<string, Node> { ["$id"] = new() { Name = "t" } }, PreserveOptions);
 
         json.Should().Contain("\"$id\":{\"name\":\"t\"}");
+    }
+
+    [TestCase(' ', 2, "\n")]
+    [TestCase('\t', 1, "\r\n")]
+    public async Task WriteIndented_MatchesReindentedCompactOutput(char indentCharacter, int indentSize, string newLine)
+    {
+        var shared = new Node { Name = "shared" };
+        var sharedList = new List<int> { 4 };
+        var payload = new
+        {
+            items = new object?[] { shared, 1, "s", new[] { 2, 3 }, true, null, 1.5 },
+            empty = Array.Empty<int>(),
+            idOnly = new Dictionary<string, int>(),
+            idKeyOnly = new Dictionary<string, string> { ["$id"] = "x" },
+            list = sharedList,
+            back = shared,
+            listAgain = sharedList
+        };
+        var indented = new JsonSerializerOptions(PreserveOptions) { WriteIndented = true, IndentCharacter = indentCharacter, IndentSize = indentSize, NewLine = newLine };
+
+        var json = await Serialize(payload, indented);
+
+        json.Should().Be(Reindent(await Serialize(payload, PreserveOptions), indented));
+    }
+
+    private static string Reindent(string compact, JsonSerializerOptions options)
+    {
+        using var document = JsonDocument.Parse(compact);
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true, IndentCharacter = options.IndentCharacter, IndentSize = options.IndentSize, NewLine = options.NewLine }))
+        {
+            document.WriteTo(writer);
+        }
+
+        return System.Text.Encoding.UTF8.GetString(buffer.ToArray());
     }
 
     internal sealed class PercentNameGraph
