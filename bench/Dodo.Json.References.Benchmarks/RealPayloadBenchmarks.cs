@@ -34,6 +34,7 @@ public class RealPayloadBenchmarks
 {
     private ReadOnlyMemory<byte> _preserved;
     private JsonSerializerOptions _options = null!;
+    private JsonSerializerOptions _indented = null!;
     private PipeWriter _pipe = null!;
 
     [GlobalSetup]
@@ -41,10 +42,28 @@ public class RealPayloadBenchmarks
     {
         _preserved = RealPayload.Load();
         _options = new JsonSerializerOptions();
+        _indented = new JsonSerializerOptions { WriteIndented = true };
         _pipe = PipeWriter.Create(Stream.Null, new StreamPipeWriterOptions(minimumBufferSize: 64 * 1024, leaveOpen: true));
     }
 
     [Benchmark]
+    public long ReaderOnly()
+    {
+        var reader = new Utf8JsonReader(_preserved.Span);
+        long tokens = 0;
+        while (reader.Read())
+        {
+            tokens++;
+        }
+
+        return tokens;
+    }
+
+    [Benchmark(Baseline = true)]
     public ValueTask Transform()
         => JsonReferenceTransformer.TransformToPipe(_preserved, _pipe, _options, CancellationToken.None);
+
+    [Benchmark]
+    public ValueTask TransformIndented()
+        => JsonReferenceTransformer.TransformToPipe(_preserved, _pipe, _indented, CancellationToken.None);
 }

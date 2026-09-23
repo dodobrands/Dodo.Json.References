@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO.Pipelines;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 
@@ -27,6 +28,9 @@ public static class JsonReferenceTransformer
 
     private static ReadOnlySpan<byte> Utf8Values
         => "$values"u8;
+
+    private static ReadOnlySpan<byte> JsonWhitespaceOrColon
+        => " \t\r\n:"u8;
 
     private static readonly JsonEncodedText EncodedId = JsonEncodedText.Encode(Utf8Id);
     private static readonly JsonEncodedText EncodedRef = JsonEncodedText.Encode(Utf8Ref);
@@ -191,6 +195,8 @@ public static class JsonReferenceTransformer
         ct.ThrowIfCancellationRequested();
 
         PathSegment[]? rentedPathStack = null;
+        byte[]? rentedIndentScratch = null;
+        var indented = writer.Options.Indented;
         Span<PathSegment> pathStack = stackalloc PathSegment[PointerPathBuilder.StackAllocDepth];
         Span<byte> pathScratch = stackalloc byte[PointerPathBuilder.ScratchSize];
         var pathStackDepth = 0;
@@ -249,8 +255,7 @@ public static class JsonReferenceTransformer
             // -1 none; -2 numeric parked; >= 0 chars in pendingDroppedId (0 with non-null string = long id).
             var pendingDroppedIdLen = -1;
             var pendingDroppedNumericId = 0u;
-            var isRefProperty = false;
-            var isPendingValuesProperty = false;
+            var pendingMetadata = PendingMetadata.None;
             var pendingPropertyOffset = -1;
             var pendingPropertyLength = 0;
 
@@ -280,7 +285,7 @@ public static class JsonReferenceTransformer
                                 top.ArrayIndex++;
                         }
 
-                        isRefProperty = false;
+                        pendingMetadata = PendingMetadata.None;
                         writer.WriteStartObject();
                         break;
 
@@ -299,10 +304,9 @@ public static class JsonReferenceTransformer
                         if (pathStackDepth == pathStack.Length)
                             pathStack = PointerPathBuilder.GrowPathStack(pathStack, ref rentedPathStack);
 
-                        if (isPendingValuesProperty)
+                        if (pendingMetadata == PendingMetadata.Values)
                         {
                             // $values is transparent in pointer paths: index-only segment, no name, no enclosing-index bump.
-                            isPendingValuesProperty = false;
                             pendingPropertyOffset = -1;
                             pathStack[pathStackDepth++] = new PathSegment
                             {
@@ -342,7 +346,7 @@ public static class JsonReferenceTransformer
                             };
                         }
 
-                        isRefProperty = false;
+                        pendingMetadata = PendingMetadata.None;
                         writer.WriteStartArray();
                         break;
 
@@ -358,7 +362,7 @@ public static class JsonReferenceTransformer
                     case JsonTokenType.PropertyName:
                         var propSpan = reader.ValueSpan;
                         var isMetadataCandidate = !propSpan.IsEmpty && propSpan[0] == (byte)'$';
-                        if (isMetadataCandidate && propSpan.SequenceEqual(Utf8Id))
+                        if (isMetadataCandidate && propSpan.SequenceEqual(Utf8Id) && IsStringValueNext(jsonBytes.Span, (int)reader.BytesConsumed))
                         {
                             reader.Read();
 
@@ -463,12 +467,12 @@ public static class JsonReferenceTransformer
                         if (isMetadataCandidate && propSpan.SequenceEqual(Utf8Ref))
                         {
                             writer.WritePropertyName(EncodedRef);
-                            isRefProperty = true;
+                            pendingMetadata = PendingMetadata.Ref;
                         }
                         else if (isMetadataCandidate && propSpan.SequenceEqual(Utf8Values))
                         {
                             writer.WritePropertyName(EncodedValues);
-                            isPendingValuesProperty = true;
+                            pendingMetadata = PendingMetadata.Values;
                         }
                         else if (!reader.ValueIsEscaped)
                         {
@@ -483,7 +487,7 @@ public static class JsonReferenceTransformer
                         break;
 
                     case JsonTokenType.String:
-                        if (isRefProperty)
+                        if (pendingMetadata == PendingMetadata.Ref)
                         {
                             pendingPropertyOffset = -1;
                             // The bit test keeps refs the pass-1 scan never saw (a converter's WriteRawValue can
@@ -519,46 +523,47 @@ public static class JsonReferenceTransformer
                                     writer.WriteStringValue(refIdSlice);
                                 }
                             }
-
-                            isRefProperty = false;
                         }
                         else
                         {
+                            var isStringElement = pendingPropertyOffset < 0;
                             PointerPathBuilder.BumpIndexForArrayElement(pathStack, pathStackDepth, pendingPropertyOffset);
                             pendingPropertyOffset = -1;
                             var tokenStart = (int)reader.TokenStartIndex;
                             var tokenEnd = (int)reader.BytesConsumed;
-                            writer.WriteRawValue(jsonSpan[tokenStart..tokenEnd], skipInputValidation: true);
+                            WriteRawScalar(writer, jsonSpan[tokenStart..tokenEnd], indented && isStringElement, ref rentedIndentScratch);
                         }
 
+                        pendingMetadata = PendingMetadata.None;
                         break;
 
                     case JsonTokenType.Number:
+                        var isNumberElement = pendingPropertyOffset < 0;
                         PointerPathBuilder.BumpIndexForArrayElement(pathStack, pathStackDepth, pendingPropertyOffset);
                         pendingPropertyOffset = -1;
                         // Raw copy preserves exact format (439.0 vs 439).
-                        isRefProperty = false;
-                        writer.WriteRawValue(reader.ValueSpan, skipInputValidation: true);
+                        pendingMetadata = PendingMetadata.None;
+                        WriteRawScalar(writer, reader.ValueSpan, indented && isNumberElement, ref rentedIndentScratch);
                         break;
 
                     case JsonTokenType.True:
                         PointerPathBuilder.BumpIndexForArrayElement(pathStack, pathStackDepth, pendingPropertyOffset);
                         pendingPropertyOffset = -1;
-                        isRefProperty = false;
+                        pendingMetadata = PendingMetadata.None;
                         writer.WriteBooleanValue(true);
                         break;
 
                     case JsonTokenType.False:
                         PointerPathBuilder.BumpIndexForArrayElement(pathStack, pathStackDepth, pendingPropertyOffset);
                         pendingPropertyOffset = -1;
-                        isRefProperty = false;
+                        pendingMetadata = PendingMetadata.None;
                         writer.WriteBooleanValue(false);
                         break;
 
                     case JsonTokenType.Null:
                         PointerPathBuilder.BumpIndexForArrayElement(pathStack, pathStackDepth, pendingPropertyOffset);
                         pendingPropertyOffset = -1;
-                        isRefProperty = false;
+                        pendingMetadata = PendingMetadata.None;
                         writer.WriteNullValue();
                         break;
                 }
@@ -569,6 +574,11 @@ public static class JsonReferenceTransformer
             if (rentedPathStack is not null)
             {
                 ArrayPool<PathSegment>.Shared.Return(rentedPathStack);
+            }
+
+            if (rentedIndentScratch is not null)
+            {
+                ArrayPool<byte>.Shared.Return(rentedIndentScratch);
             }
 
             if (referencedBitmap is not null)
@@ -588,5 +598,47 @@ public static class JsonReferenceTransformer
         }
 
         return ValueTask.CompletedTask;
+    }
+
+    private static void WriteRawScalar(Utf8JsonWriter writer, ReadOnlySpan<byte> value, bool isIndentedElement, ref byte[]? scratch)
+    {
+        if (!isIndentedElement || writer.CurrentDepth == 0)
+        {
+            writer.WriteRawValue(value, skipInputValidation: true);
+            return;
+        }
+
+        // WriteRawValue emits the separator but not the newline and indentation an indented writer puts before an array element.
+        var options = writer.Options;
+        var indentLength = options.IndentSize * writer.CurrentDepth;
+        var length = options.NewLine.Length + indentLength + value.Length;
+        if (scratch is null || scratch.Length < length)
+        {
+            if (scratch is not null)
+            {
+                ArrayPool<byte>.Shared.Return(scratch);
+            }
+
+            scratch = ArrayPool<byte>.Shared.Rent(length);
+        }
+
+        var element = scratch.AsSpan(0, length);
+        var newLineLength = Encoding.UTF8.GetBytes(options.NewLine, element);
+        element.Slice(newLineLength, indentLength).Fill((byte)options.IndentCharacter);
+        value.CopyTo(element[(newLineLength + indentLength)..]);
+        writer.WriteRawValue(element, skipInputValidation: true);
+    }
+
+    private static bool IsStringValueNext(ReadOnlySpan<byte> json, int afterName)
+    {
+        var rest = json[afterName..];
+        return rest[rest.IndexOfAnyExcept(JsonWhitespaceOrColon)] == (byte)'"';
+    }
+
+    private enum PendingMetadata : byte
+    {
+        None,
+        Ref,
+        Values
     }
 }
