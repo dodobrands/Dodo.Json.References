@@ -179,7 +179,23 @@ internal sealed class JsonReferenceTransformerEdgeTests
         options.Converters.Add(new RawRefConverter());
         var json = await Serialize(new RawRefGraph { Left = new Node { Name = "s" } }, options);
 
-        json.Should().Be("""{"left":{"$id":"#/left","name":"s"},"raw":{"$ref":"#/left"}}""");
+        json.Should().Be("""{"left":{"$id":"#/left","name":"s"},"raw":{"$ref":"#/left"},"right":null}""");
+    }
+
+    [Test]
+    public async Task SpacedDanglingRawRef_NeverSurfacesADirtyPoolSlot()
+    {
+        var dirty = System.Buffers.ArrayPool<long>.Shared.Rent(201);
+        dirty[2] = 3L;
+        System.Buffers.ArrayPool<long>.Shared.Return(dirty);
+
+        // Ids 100 apart stay under the 1/8 sparse-clear threshold in PointerPathBuilder.ClearTrackedIdPaths.
+        var options = CustomIdOptions(n => (n * 100).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        options.Converters.Add(new RawRefConverter());
+        var shared = new Node { Name = "s" };
+        var json = await Serialize(new RawRefGraph { Left = shared, Right = shared }, options);
+
+        json.Should().Be("""{"left":{"$id":"#/left","name":"s"},"raw":{"$ref":"2"},"right":{"$ref":"#/left"}}""");
     }
 
     [Test]
@@ -594,6 +610,7 @@ internal sealed class JsonReferenceTransformerEdgeTests
     {
         public Node? Left { get; set; }
         public RawRefHolder Raw { get; set; } = new();
+        public Node? Right { get; set; }
     }
 
     [JsonConverter(typeof(NonStringRefConverter))]
