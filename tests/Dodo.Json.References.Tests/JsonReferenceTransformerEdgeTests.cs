@@ -478,6 +478,63 @@ internal sealed class JsonReferenceTransformerEdgeTests
         json.Should().Contain("\"$ref\":\"#/1\"");
     }
 
+    [Test]
+    public async Task ValuesDictionaryKeyWithScalarValue_DoesNotSwallowTheNextPropertyName()
+    {
+        var shared = new Node { Name = "shared" };
+        var json = await Serialize(new { d = new Dictionary<string, int> { ["$values"] = 1 }, x = new[] { new[] { shared } }, y = shared }, PreserveOptions);
+
+        json.Should().Contain("\"$id\":\"#/x/0/0\"");
+        json.Should().Contain("\"$ref\":\"#/x/0/0\"");
+    }
+
+    [Test]
+    public async Task IdDictionaryKeyWithNumberValue_IsKeptAsData()
+    {
+        var json = await Serialize(new Dictionary<string, int> { ["$id"] = 5, ["b"] = 1 }, PreserveOptions);
+
+        json.Should().Contain("\"$id\":5");
+    }
+
+    [Test]
+    public async Task IdDictionaryKeyWithObjectValue_IsKeptAsData()
+    {
+        var json = await Serialize(new Dictionary<string, Node> { ["$id"] = new() { Name = "t" } }, PreserveOptions);
+
+        json.Should().Contain("\"$id\":{\"name\":\"t\"}");
+    }
+
+    [Test]
+    public void IdWithoutValueFromRawConverter_ThrowsJsonException()
+    {
+        Assert.CatchAsync<JsonException>(async () => await Serialize(new TruncatedIdHolder(), PreserveOptions));
+    }
+
+    [TestCase(' ', 2, "\n")]
+    [TestCase('\t', 1, "\r\n")]
+    public async Task WriteIndented_PutsEveryArrayElementOnItsOwnLine(char indentCharacter, int indentSize, string newLine)
+    {
+        var shared = new Node { Name = "shared" };
+        var payload = new { items = new object?[] { shared, 1, "s", new[] { 2, 3 }, true, null, 1.5 }, empty = Array.Empty<int>(), back = shared };
+        var indented = new JsonSerializerOptions(PreserveOptions) { WriteIndented = true, IndentCharacter = indentCharacter, IndentSize = indentSize, NewLine = newLine };
+
+        var json = await Serialize(payload, indented);
+
+        json.Should().Be(Reindent(await Serialize(payload, PreserveOptions), indented));
+    }
+
+    private static string Reindent(string compact, JsonSerializerOptions options)
+    {
+        using var document = JsonDocument.Parse(compact);
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true, IndentCharacter = options.IndentCharacter, IndentSize = options.IndentSize, NewLine = options.NewLine }))
+        {
+            document.WriteTo(writer);
+        }
+
+        return System.Text.Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
     internal sealed class PercentNameGraph
     {
         [JsonPropertyName("c%d")]
@@ -559,6 +616,18 @@ internal sealed class JsonReferenceTransformerEdgeTests
 
         public override void Write(Utf8JsonWriter writer, NonStringRefHolder value, JsonSerializerOptions options)
             => writer.WriteRawValue("""{"items":[{"$ref":true},{"$id":"1","name":"t"}],"back":{"$ref":"1"}}""");
+    }
+
+    [JsonConverter(typeof(TruncatedIdConverter))]
+    internal sealed class TruncatedIdHolder;
+
+    private sealed class TruncatedIdConverter: System.Text.Json.Serialization.JsonConverter<TruncatedIdHolder>
+    {
+        public override TruncatedIdHolder Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => throw new NotSupportedException();
+
+        public override void Write(Utf8JsonWriter writer, TruncatedIdHolder value, JsonSerializerOptions options)
+            => writer.WriteRawValue("{\"$id\":", skipInputValidation: true);
     }
 
     internal sealed class EscapedIdPairHolder
