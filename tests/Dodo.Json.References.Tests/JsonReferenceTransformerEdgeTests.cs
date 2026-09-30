@@ -504,6 +504,12 @@ internal sealed class JsonReferenceTransformerEdgeTests
         json.Should().Contain("\"$id\":{\"name\":\"t\"}");
     }
 
+    [Test]
+    public void IdWithoutValueFromRawConverter_ThrowsJsonException()
+    {
+        Assert.CatchAsync<JsonException>(async () => await Serialize(new TruncatedIdHolder(), PreserveOptions));
+    }
+
     [TestCase(' ', 2, "\n")]
     [TestCase('\t', 1, "\r\n")]
     public async Task WriteIndented_PutsEveryArrayElementOnItsOwnLine(char indentCharacter, int indentSize, string newLine)
@@ -610,6 +616,18 @@ internal sealed class JsonReferenceTransformerEdgeTests
 
         public override void Write(Utf8JsonWriter writer, NonStringRefHolder value, JsonSerializerOptions options)
             => writer.WriteRawValue("""{"items":[{"$ref":true},{"$id":"1","name":"t"}],"back":{"$ref":"1"}}""");
+    }
+
+    [JsonConverter(typeof(TruncatedIdConverter))]
+    internal sealed class TruncatedIdHolder;
+
+    private sealed class TruncatedIdConverter: System.Text.Json.Serialization.JsonConverter<TruncatedIdHolder>
+    {
+        public override TruncatedIdHolder Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => throw new NotSupportedException();
+
+        public override void Write(Utf8JsonWriter writer, TruncatedIdHolder value, JsonSerializerOptions options)
+            => writer.WriteRawValue("{\"$id\":", skipInputValidation: true);
     }
 
     internal sealed class EscapedIdPairHolder

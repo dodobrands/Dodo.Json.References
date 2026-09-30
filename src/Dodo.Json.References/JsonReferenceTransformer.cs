@@ -614,12 +614,12 @@ public static class JsonReferenceTransformer
         var length = options.NewLine.Length + indentLength + value.Length;
         if (scratch is null || scratch.Length < length)
         {
-            if (scratch is not null)
-            {
-                ArrayPool<byte>.Shared.Return(scratch);
-            }
-
+            var outgrown = scratch;
             scratch = ArrayPool<byte>.Shared.Rent(length);
+            if (outgrown is not null)
+            {
+                ArrayPool<byte>.Shared.Return(outgrown);
+            }
         }
 
         var element = scratch.AsSpan(0, length);
@@ -632,7 +632,8 @@ public static class JsonReferenceTransformer
     private static bool IsStringValueNext(ReadOnlySpan<byte> json, int afterName)
     {
         var rest = json[afterName..];
-        return rest[rest.IndexOfAnyExcept(JsonWhitespaceOrColon)] == (byte)'"';
+        var valueStart = rest.IndexOfAnyExcept(JsonWhitespaceOrColon);
+        return (uint)valueStart < (uint)rest.Length && rest[valueStart] == (byte)'"';
     }
 
     private enum PendingMetadata : byte
