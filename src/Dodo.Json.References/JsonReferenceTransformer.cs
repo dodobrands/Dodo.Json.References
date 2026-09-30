@@ -29,9 +29,6 @@ public static class JsonReferenceTransformer
     private static ReadOnlySpan<byte> Utf8Values
         => "$values"u8;
 
-    private static ReadOnlySpan<byte> JsonWhitespaceOrColon
-        => " \t\r\n:"u8;
-
     private static readonly JsonEncodedText EncodedId = JsonEncodedText.Encode(Utf8Id);
     private static readonly JsonEncodedText EncodedRef = JsonEncodedText.Encode(Utf8Ref);
     private static readonly JsonEncodedText EncodedValues = JsonEncodedText.Encode(Utf8Values);
@@ -129,7 +126,6 @@ public static class JsonReferenceTransformer
     private static JsonWriterOptions GetWriterOptions(JsonSerializerOptions options)
         => GetWriterOptions(options, options.WriteIndented);
 
-    // The intermediate buffer is byte-scanned for "$ref":" and must never be indented; the final writer honors WriteIndented.
     private static JsonWriterOptions GetWriterOptions(JsonSerializerOptions options, bool indented)
         => new()
         {
@@ -209,7 +205,7 @@ public static class JsonReferenceTransformer
 
         try
         {
-            // Pass 1: byte-scan for "$ref":" — decimal ids into the stack-first builder, exotic ones into a lazy overflow set.
+            // Pass 1: byte-scan for "$ref" string values — decimal ids into the stack-first builder, exotic ones into a lazy overflow set.
             HashSet<string>? referencedOverflow = null;
             uint maxNumericId;
             int bitmapWords;
@@ -256,6 +252,7 @@ public static class JsonReferenceTransformer
             var pendingDroppedIdLen = -1;
             var pendingDroppedNumericId = 0u;
             var pendingMetadata = PendingMetadata.None;
+            var isFirstProperty = false;
             var pendingPropertyOffset = -1;
             var pendingPropertyLength = 0;
 
@@ -286,10 +283,12 @@ public static class JsonReferenceTransformer
                         }
 
                         pendingMetadata = PendingMetadata.None;
+                        isFirstProperty = true;
                         writer.WriteStartObject();
                         break;
 
                     case JsonTokenType.EndObject:
+                        isFirstProperty = false;
                         pendingDroppedIdLen = -1;
                         pendingDroppedIdString = null;
                         writer.WriteEndObject();
@@ -362,7 +361,9 @@ public static class JsonReferenceTransformer
                     case JsonTokenType.PropertyName:
                         var propSpan = reader.ValueSpan;
                         var isMetadataCandidate = !propSpan.IsEmpty && propSpan[0] == (byte)'$';
-                        if (isMetadataCandidate && propSpan.SequenceEqual(Utf8Id) && IsStringValueNext(jsonBytes.Span, (int)reader.BytesConsumed))
+                        var isFirst = isFirstProperty;
+                        isFirstProperty = false;
+                        if (isFirst && isMetadataCandidate && propSpan.SequenceEqual(Utf8Id) && IsFollowedBy(jsonSpan, (int)reader.BytesConsumed, (byte)'"'))
                         {
                             reader.Read();
 
@@ -467,7 +468,7 @@ public static class JsonReferenceTransformer
                         if (isMetadataCandidate && propSpan.SequenceEqual(Utf8Ref))
                         {
                             writer.WritePropertyName(EncodedRef);
-                            pendingMetadata = PendingMetadata.Ref;
+                            pendingMetadata = isFirst ? PendingMetadata.Ref : PendingMetadata.None;
                         }
                         else if (isMetadataCandidate && propSpan.SequenceEqual(Utf8Values))
                         {
@@ -487,14 +488,11 @@ public static class JsonReferenceTransformer
                         break;
 
                     case JsonTokenType.String:
-                        if (pendingMetadata == PendingMetadata.Ref)
+                        if (pendingMetadata == PendingMetadata.Ref && IsFollowedBy(jsonSpan, (int)reader.BytesConsumed, (byte)'}'))
                         {
                             pendingPropertyOffset = -1;
-                            // The bit test keeps refs the pass-1 scan never saw (a converter's WriteRawValue can
-                            // emit "$ref" with arbitrary spacing) away from slots the sparse rent-clear skipped.
                             if (NumericId.TryRead(ref reader, idDecodeSpan, out var numericRefId)
                                 && numericRefId <= maxNumericId
-                                && (referencedBitmap[numericRefId >> 6] & (1UL << (int)numericRefId)) != 0
                                 && idPaths[numericRefId] != 0)
                             {
                                 writer.WriteRawValue(PointerPathBuilder.Slice(pathArena, idPaths[numericRefId]), skipInputValidation: true);
@@ -629,11 +627,10 @@ public static class JsonReferenceTransformer
         writer.WriteRawValue(element, skipInputValidation: true);
     }
 
-    private static bool IsStringValueNext(ReadOnlySpan<byte> json, int afterName)
+    private static bool IsFollowedBy(ReadOnlySpan<byte> json, int from, byte expected)
     {
-        var rest = json[afterName..];
-        var valueStart = rest.IndexOfAnyExcept(JsonWhitespaceOrColon);
-        return (uint)valueStart < (uint)rest.Length && rest[valueStart] == (byte)'"';
+        var next = ReferencedIdScanner.SkipWhitespaceOrColon(json, from);
+        return next < json.Length && json[next] == expected;
     }
 
     private enum PendingMetadata : byte

@@ -169,33 +169,33 @@ internal sealed class JsonReferenceTransformerEdgeTests
             => throw new NotSupportedException();
 
         public override void Write(Utf8JsonWriter writer, RawRefHolder value, JsonSerializerOptions options)
-            => writer.WriteRawValue("{\"$ref\": \"1\"}");
-    }
-
-    internal sealed class RawRefGraph
-    {
-        public RawRefHolder Raw { get; set; } = new();
-        public Node? Left { get; set; }
-        public Node? Right { get; set; }
+            => writer.WriteRawValue("{ \"$ref\" :\r\n\t\"2\" }");
     }
 
     [Test]
-    public async Task RawConverterRef_InvisibleToScan_PassesThroughVerbatim()
+    public async Task SpacedRawConverterRef_KeepsItsTargetAndBecomesPointer()
     {
-        // A foreign renter returns the bucket dirty at slot 1; the transformer must never surface it.
-        var dirty = System.Buffers.ArrayPool<long>.Shared.Rent(301);
-        dirty[1] = 3L;
+        var options = new JsonSerializerOptions(PreserveOptions);
+        options.Converters.Add(new RawRefConverter());
+        var json = await Serialize(new RawRefGraph { Left = new Node { Name = "s" } }, options);
+
+        json.Should().Be("""{"left":{"$id":"#/left","name":"s"},"raw":{"$ref":"#/left"},"right":null}""");
+    }
+
+    [Test]
+    public async Task SpacedDanglingRawRef_NeverSurfacesADirtyPoolSlot()
+    {
+        var dirty = System.Buffers.ArrayPool<long>.Shared.Rent(201);
+        dirty[2] = 3L;
         System.Buffers.ArrayPool<long>.Shared.Return(dirty);
 
-        // "$ref": "1" (with a space) is invisible to the pass-1 byte scan, so slot 1 is untracked; ids are
-        // spread 100 apart to keep density under 1/8 so the rent-clear takes the sparse branch and skips it.
+        // Ids 100 apart stay under the 1/8 sparse-clear threshold in PointerPathBuilder.ClearTrackedIdPaths.
         var options = CustomIdOptions(n => (n * 100).ToString(System.Globalization.CultureInfo.InvariantCulture));
         options.Converters.Add(new RawRefConverter());
         var shared = new Node { Name = "s" };
-        var json = await Serialize(new RawRefGraph { Raw = new RawRefHolder(), Left = shared, Right = shared }, options);
+        var json = await Serialize(new RawRefGraph { Left = shared, Right = shared }, options);
 
-        json.Should().Contain("\"$ref\":\"1\"", "a scan-invisible ref must pass through verbatim");
-        json.Should().Contain("\"$ref\":\"#/left\"", "tracked refs still transform");
+        json.Should().Be("""{"left":{"$id":"#/left","name":"s"},"raw":{"$ref":"2"},"right":{"$ref":"#/left"}}""");
     }
 
     [Test]
@@ -426,7 +426,7 @@ internal sealed class JsonReferenceTransformerEdgeTests
     {
         var options = CustomIdOptions(n => n.ToString(System.Globalization.CultureInfo.InvariantCulture));
         options.Converters.Add(new EscapedRefConverter());
-        var json = await Serialize(new EscapedRefGraph { Left = new Node { Name = "s" }, Raw = new RawRefHolder() }, options);
+        var json = await Serialize(new RawRefGraph { Left = new Node { Name = "s" }, Raw = new RawRefHolder() }, options);
 
         json.Should().Contain("\"$id\":\"#\"", "the root owns the numeric id the escaped $ref names");
         json.Should().Contain("\"raw\":{\"$ref\":\"#\"}", "an escaped $ref still resolves to its target");
@@ -505,6 +505,36 @@ internal sealed class JsonReferenceTransformerEdgeTests
     }
 
     [Test]
+    public async Task IdDictionaryKeyWithStringValue_IsKeptAsData()
+    {
+        var json = await Serialize(new Dictionary<string, string> { ["$id"] = "x" }, PreserveOptions);
+
+        json.Should().Be("""{"$id":"x"}""");
+    }
+
+    [Test]
+    public async Task RefDictionaryKeyNamingAnExistingId_IsKeptAsData()
+    {
+        var json = await Serialize(new Dictionary<string, string> { ["$ref"] = "1" }, PreserveOptions);
+
+        json.Should().Contain("\"$ref\":\"1\"");
+    }
+
+    [TestCase("""{"title":"t","$id":"s"}""")]
+    [TestCase("""{"x":{},"$id":"s"}""")]
+    [TestCase("""{"x":[],"$id":"s"}""")]
+    [TestCase("""{"$id":1,"x":1}""")]
+    [TestCase("""{"type":"object","$ref":"1"}""")]
+    [TestCase("""{"$ref":"1","x":1}""")]
+    [TestCase("""{"$ref":1}""")]
+    public async Task MetadataNamedKeysOutsideStjShape_InJsonElement_AreKeptAsData(string raw)
+    {
+        var json = await Serialize(new { schema = JsonSerializer.Deserialize<JsonElement>(raw) }, PreserveOptions);
+
+        json.Should().Contain($"\"schema\":{raw}");
+    }
+
+    [Test]
     public void IdWithoutValueFromRawConverter_ThrowsJsonException()
     {
         Assert.CatchAsync<JsonException>(async () => await Serialize(new TruncatedIdHolder(), PreserveOptions));
@@ -576,10 +606,11 @@ internal sealed class JsonReferenceTransformerEdgeTests
             => writer.WriteRawValue("{\"$ref\":\"\\u0031\"}");
     }
 
-    internal sealed class EscapedRefGraph
+    internal sealed class RawRefGraph
     {
         public Node? Left { get; set; }
         public RawRefHolder Raw { get; set; } = new();
+        public Node? Right { get; set; }
     }
 
     [JsonConverter(typeof(NonStringRefConverter))]
