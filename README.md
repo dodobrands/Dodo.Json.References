@@ -127,9 +127,14 @@ the pair is single-operation — `PoolingReferenceResolver.Reset()` between docu
 - Pointers follow RFC 6901 section 6: section 3 escaping (`~` → `~0`, `/` → `~1`), then RFC 3986
   percent-encoding of every byte the fragment rule disallows, over the UTF-8 octets of the decoded
   property name. ASCII names built from unreserved and sub-delimiter characters pass through as-is.
-- Metadata detection is name-based (`$id`/`$ref`/`$values`). Ids that require JSON escaping are
-  decoded before matching, so `"1"` and `"\u0031"` name the same object; escaped non-numeric ids
-  fall off the dense fast path onto a slower dictionary lookup.
+- Metadata is recognized by its STJ Preserve shape: a string `$id` as the first property of an
+  object, and a string `$ref` as the only one. Any other `$id`/`$ref` is data and passes through
+  unchanged — e.g. inside `JsonElement`/`JsonNode` values, which STJ writes verbatim. Embedded raw
+  JSON that repeats a metadata shape exactly is indistinguishable from it and gets transformed.
+- `$values` is recognized by name alone: an array under any `$values` key is a transparent collection
+  wrapper. Pointers address the logical graph, so a plain RFC 6901 resolver must unwrap `$values`.
+- Ids that require JSON escaping are decoded before matching, so `"1"` and `"\u0031"` name the same
+  object; escaped non-numeric ids fall off the dense fast path onto a slower dictionary lookup.
 - Input must be `ReferenceHandler.Preserve`-shaped: a `$ref` never precedes its `$id` (STJ always
   writes them in that order). Forward references keep their original id string, untransformed.
 - Base options are snapshotted at construction — later mutations are not observed; the first lease

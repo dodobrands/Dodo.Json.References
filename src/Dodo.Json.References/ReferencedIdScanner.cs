@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Numerics;
 using System.Text.Json;
 
@@ -14,8 +15,10 @@ internal static class ReferencedIdScanner
     internal static int SizeHint
         => Volatile.Read(ref _sizeHint);
 
-    private static ReadOnlySpan<byte> RefPattern
-        => "\"$ref\":\""u8;
+    private static readonly SearchValues<byte> JsonWhitespaceOrColon = SearchValues.Create(" \t\r\n:"u8);
+
+    private static ReadOnlySpan<byte> RefName
+        => "\"$ref\""u8;
 
     internal static void Collect(
         ReadOnlySpan<byte> jsonSpan,
@@ -29,11 +32,18 @@ internal static class ReferencedIdScanner
 
         while (true)
         {
-            var idx = jsonSpan[offset..].IndexOf(RefPattern);
+            var idx = jsonSpan[offset..].IndexOf(RefName);
             if (idx < 0)
                 break;
 
-            var quoteAt = offset + idx + RefPattern.Length - 1;
+            offset += idx + RefName.Length;
+            var quoteAt = SkipWhitespaceOrColon(jsonSpan, offset);
+            if (quoteAt == jsonSpan.Length)
+                break;
+
+            if (jsonSpan[quoteAt] != (byte)'"')
+                continue;
+
             var valueAt = quoteAt + 1;
 
             var endQuote = jsonSpan[valueAt..].IndexOf((byte)'"');
@@ -91,5 +101,13 @@ internal static class ReferencedIdScanner
 
         var learned = Math.Min(MaxSizeHint, (long)BitOperations.RoundUpToPowerOf2((uint)ids.Count));
         InterlockedMath.Max(ref _sizeHint, (int)learned);
+    }
+
+    internal static int SkipWhitespaceOrColon(ReadOnlySpan<byte> json, int from)
+    {
+        while (from < json.Length && JsonWhitespaceOrColon.Contains(json[from]))
+            from++;
+
+        return from;
     }
 }
